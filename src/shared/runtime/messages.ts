@@ -2,7 +2,7 @@ export const ANNOTATION_TOOLS = ['select', 'text', 'sticky-note', 'rectangle', '
 
 export type AnnotationTool = (typeof ANNOTATION_TOOLS)[number];
 
-export const ANNOTATION_COMMANDS = ['cancel-current-action', 'undo', 'redo'] as const;
+export const ANNOTATION_COMMANDS = ['cancel-current-action', 'delete-selected-annotation', 'undo', 'redo'] as const;
 
 export type AnnotationCommand = (typeof ANNOTATION_COMMANDS)[number];
 

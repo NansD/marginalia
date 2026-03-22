@@ -1,6 +1,12 @@
 import { fireEvent, screen } from '@testing-library/react';
 
-import { buildRectangleAnnotation } from '@/test/factories';
+import {
+  buildConnectorAnnotation,
+  buildEllipseAnnotation,
+  buildRectangleAnnotation,
+  buildStickyNoteAnnotation,
+  buildTextAnnotation,
+} from '@/test/factories';
 
 import {
   createOverlayController,
@@ -17,7 +23,10 @@ const getOverlayElement = (): SVGSVGElement => {
 };
 
 const getDraftRectangle = (): SVGRectElement | null =>
-  getOverlayElement().querySelector<SVGRectElement>('rect:not([data-marginalia-annotation-id])');
+  getOverlayElement().querySelector<SVGRectElement>('g[data-marginalia-layer="drafts"] rect');
+
+const getDraftEllipse = (): SVGEllipseElement | null =>
+  getOverlayElement().querySelector<SVGEllipseElement>('g[data-marginalia-layer="drafts"] ellipse');
 
 describe('createOverlayController', () => {
   beforeEach(() => {
@@ -52,71 +61,19 @@ describe('createOverlayController', () => {
     expect(document.getElementById(OVERLAY_TOOLBAR_ID)).not.toBeInTheDocument();
   });
 
-  it('renders non-rectangle annotations inertly for future tools', () => {
+  it('renders supported v1 annotations inertly for future editing work', () => {
     const controller = createOverlayController(document, window);
 
     controller.setAnnotations([
-      {
-        id: 'ellipse-1',
-        type: 'ellipse',
-        createdAt: '2025-01-01T00:00:00.000Z',
-        updatedAt: '2025-01-01T00:00:00.000Z',
+      buildEllipseAnnotation('ellipse-1'),
+      buildTextAnnotation('text-1'),
+      buildStickyNoteAnnotation('sticky-1'),
+      buildConnectorAnnotation('connector-1', {
         content: {
-          kind: 'ellipse',
-          x: 220,
-          y: 40,
-          width: 120,
-          height: 80,
-          color: 'green',
-        },
-      },
-      {
-        id: 'text-1',
-        type: 'text',
-        createdAt: '2025-01-01T00:00:00.000Z',
-        updatedAt: '2025-01-01T00:00:00.000Z',
-        content: {
-          kind: 'text',
-          x: 24,
-          y: 140,
-          width: 180,
-          height: 48,
-          text: 'Draft text annotation',
-          color: 'blue',
-        },
-      },
-      {
-        id: 'sticky-1',
-        type: 'sticky-note',
-        createdAt: '2025-01-01T00:00:00.000Z',
-        updatedAt: '2025-01-01T00:00:00.000Z',
-        content: {
-          kind: 'sticky-note',
-          x: 260,
-          y: 160,
-          width: 180,
-          height: 120,
-          color: 'yellow',
-          text: 'Investigate follow-up tasks',
-          collapsed: false,
-          title: 'Follow-up',
-        },
-      },
-      {
-        id: 'connector-1',
-        type: 'connector',
-        createdAt: '2025-01-01T00:00:00.000Z',
-        updatedAt: '2025-01-01T00:00:00.000Z',
-        content: {
-          kind: 'connector',
           sourceId: 'text-1',
-          sourceAnchor: 'right',
           targetId: 'sticky-1',
-          targetAnchor: 'left',
-          color: 'purple',
-          label: 'links',
         },
-      },
+      }),
     ]);
 
     const overlayElement = getOverlayElement();
@@ -136,6 +93,7 @@ describe('createOverlayController', () => {
 
     expect(screen.getByText('Marginalia annotation mode')).toBeInTheDocument();
     expect(screen.getByText('Drag anywhere on the page to draw a rectangle annotation.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete selected' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 
@@ -180,6 +138,82 @@ describe('createOverlayController', () => {
     expect(getDraftRectangle()).not.toBeInTheDocument();
   });
 
+  it('creates ellipse annotations from pointer interactions', () => {
+    const onCreateAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+
+    controller.setInteractive(true);
+    controller.setActiveTool('ellipse');
+
+    const overlayElement = getOverlayElement();
+
+    fireEvent.pointerDown(overlayElement, { button: 0, clientX: 160, clientY: 120, pointerId: 11 });
+    expect(getDraftEllipse()).toHaveAttribute('cx', '160');
+    expect(getDraftEllipse()).toHaveAttribute('cy', '120');
+    expect(getDraftEllipse()).toHaveAttribute('rx', '0');
+    expect(getDraftEllipse()).toHaveAttribute('ry', '0');
+
+    fireEvent.pointerMove(overlayElement, { clientX: 80, clientY: 40, pointerId: 11 });
+    expect(getDraftEllipse()).toHaveAttribute('cx', '120');
+    expect(getDraftEllipse()).toHaveAttribute('cy', '80');
+    expect(getDraftEllipse()).toHaveAttribute('rx', '40');
+    expect(getDraftEllipse()).toHaveAttribute('ry', '40');
+
+    fireEvent.pointerUp(overlayElement, { pointerId: 11 });
+
+    expect(onCreateAnnotation).toHaveBeenCalledWith({
+      kind: 'ellipse',
+      x: 80,
+      y: 40,
+      width: 80,
+      height: 80,
+      color: 'green',
+    });
+    expect(getDraftEllipse()).not.toBeInTheDocument();
+  });
+
+  it('creates text annotations with sensible click-to-place defaults', () => {
+    const onCreateAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+
+    controller.setInteractive(true);
+    controller.setActiveTool('text');
+
+    fireEvent.pointerDown(getOverlayElement(), { button: 0, clientX: 42, clientY: 64, pointerId: 3 });
+
+    expect(onCreateAnnotation).toHaveBeenCalledWith({
+      kind: 'text',
+      x: 42,
+      y: 64,
+      width: 220,
+      height: 56,
+      color: 'blue',
+      text: 'Text annotation',
+    });
+  });
+
+  it('creates sticky notes with sensible click-to-place defaults', () => {
+    const onCreateAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+
+    controller.setInteractive(true);
+    controller.setActiveTool('sticky-note');
+
+    fireEvent.pointerDown(getOverlayElement(), { button: 0, clientX: 90, clientY: 110, pointerId: 5 });
+
+    expect(onCreateAnnotation).toHaveBeenCalledWith({
+      kind: 'sticky-note',
+      x: 90,
+      y: 110,
+      width: 220,
+      height: 160,
+      color: 'yellow',
+      collapsed: false,
+      text: 'New note',
+      title: 'Sticky note',
+    });
+  });
+
   it('ignores other pointer ids and clears drafts through the cancel command', () => {
     const onRunCommand = vi.fn();
     const controller = createOverlayController(document, window, { onRunCommand });
@@ -202,11 +236,12 @@ describe('createOverlayController', () => {
     expect(onRunCommand).toHaveBeenCalledWith('cancel-current-action');
   });
 
-  it('rejects rectangles smaller than the minimum draw size', () => {
+  it('rejects shapes smaller than the minimum draw size', () => {
     const onCreateAnnotation = vi.fn();
     const controller = createOverlayController(document, window, { onCreateAnnotation });
 
     controller.setInteractive(true);
+    controller.setActiveTool('ellipse');
 
     const overlayElement = getOverlayElement();
 
@@ -215,10 +250,10 @@ describe('createOverlayController', () => {
     fireEvent.pointerUp(overlayElement, { pointerId: 4 });
 
     expect(onCreateAnnotation).not.toHaveBeenCalled();
-    expect(getDraftRectangle()).not.toBeInTheDocument();
+    expect(getDraftEllipse()).not.toBeInTheDocument();
   });
 
-  it('updates tool messaging and clears drafts when switching away from rectangles', () => {
+  it('updates tool messaging and clears drafts when switching tools', () => {
     const controller = createOverlayController(document, window);
 
     controller.setInteractive(true);
@@ -229,12 +264,35 @@ describe('createOverlayController', () => {
 
     expect(getDraftRectangle()).toBeInTheDocument();
 
-    controller.setActiveTool('ellipse');
+    controller.setActiveTool('text');
 
     expect(getDraftRectangle()).not.toBeInTheDocument();
-    expect(screen.getByText('Ellipse tool selection is ready, but drawing stays on rectangles for now.')).toBeInTheDocument();
-    expect(screen.getByText('Ellipse tool active. No annotations on this page yet.')).toBeInTheDocument();
-    expect(overlayElement).toHaveAttribute('data-active-tool', 'ellipse');
+    expect(screen.getByText('Click anywhere on the page to place a text annotation.')).toBeInTheDocument();
+    expect(screen.getByText('Text tool active. No annotations on this page yet.')).toBeInTheDocument();
+    expect(overlayElement).toHaveAttribute('data-active-tool', 'text');
+  });
+
+  it('selects annotations in select mode and forwards delete requests for the selection', () => {
+    const onRunCommand = vi.fn();
+    const controller = createOverlayController(document, window, { onRunCommand });
+
+    controller.setAnnotations([buildRectangleAnnotation('annotation-selected')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-selected"]');
+
+    expect(annotationElement).toBeInTheDocument();
+
+    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 10 });
+
+    expect(getOverlayElement()).toHaveAttribute('data-selection', 'single');
+    expect(screen.getByText('Select tool active. Selected Rectangle annotation.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete selected' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+
+    expect(onRunCommand).toHaveBeenCalledWith('delete-selected-annotation');
   });
 
   it('queues document sync through requestAnimationFrame on scroll and resize', () => {

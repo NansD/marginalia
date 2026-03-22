@@ -10,7 +10,6 @@ import {
   type ConnectorAnnotation,
   type EllipseAnnotation,
   type RectangleAnnotation,
-  type RectangleAnnotationContent,
   type StickyNoteAnnotation,
   type TextAnnotation,
 } from '@/shared/models/annotations';
@@ -30,6 +29,10 @@ const MIN_RECT_SIZE = 8;
 const ACCENT_COLOR = '#4f46e5';
 const SELECTED_STROKE_COLOR = '#312e81';
 const OVERLAY_CLEANUP_KEY = '__marginaliaOverlayCleanup';
+const DEFAULT_TEXT_WIDTH = 220;
+const DEFAULT_TEXT_HEIGHT = 56;
+const DEFAULT_STICKY_NOTE_WIDTH = 220;
+const DEFAULT_STICKY_NOTE_HEIGHT = 160;
 const TOOL_LABELS: Record<AnnotationTool, string> = {
   select: 'Select',
   text: 'Text',
@@ -40,10 +43,10 @@ const TOOL_LABELS: Record<AnnotationTool, string> = {
 };
 const TOOL_HINTS: Record<AnnotationTool, string> = {
   select: 'Click an annotation to select it.',
-  text: 'Text tool selection is ready, but creation and editing stay in follow-up work.',
-  'sticky-note': 'Sticky note tool selection is ready, but placement and editing stay in follow-up work.',
+  text: 'Click anywhere on the page to place a text annotation.',
+  'sticky-note': 'Click anywhere on the page to place a sticky note.',
   rectangle: 'Drag anywhere on the page to draw a rectangle annotation.',
-  ellipse: 'Ellipse tool selection is ready, but drawing stays on rectangles for now.',
+  ellipse: 'Drag anywhere on the page to draw an ellipse annotation.',
   connector: 'Connector tool selection is ready, but drawing stays in follow-up work.',
 };
 const PALETTE_COLORS: Record<AnnotationPalette, string> = {
@@ -77,6 +80,11 @@ type OverlayWindow = Window & {
   [OVERLAY_CLEANUP_KEY]?: () => void;
 };
 
+type ShapeTool = Extract<AnnotationTool, 'ellipse' | 'rectangle'>;
+
+const isSvgTag = (element: Element | null, tagName: string): boolean =>
+  element?.tagName.toLowerCase() === tagName;
+
 const getDocumentDimensions = (documentRef: Document) => {
   const { body, documentElement } = documentRef;
 
@@ -100,13 +108,36 @@ const getDocumentDimensions = (documentRef: Document) => {
 
 const getAnnotationColor = (color?: AnnotationPalette): string => (color ? PALETTE_COLORS[color] : ACCENT_COLOR);
 
-const normalizeRectangle = (startX: number, startY: number, currentX: number, currentY: number): RectangleAnnotationContent => ({
-  kind: 'rectangle',
+const normalizeBounds = (startX: number, startY: number, currentX: number, currentY: number): CanvasBounds => ({
   x: Math.min(startX, currentX),
   y: Math.min(startY, currentY),
   width: Math.abs(currentX - startX),
   height: Math.abs(currentY - startY),
 });
+
+const createTextAnnotationContent = (point: { x: number; y: number }): AnnotationContent => ({
+  kind: 'text',
+  x: point.x,
+  y: point.y,
+  width: DEFAULT_TEXT_WIDTH,
+  height: DEFAULT_TEXT_HEIGHT,
+  color: 'blue',
+  text: 'Text annotation',
+});
+
+const createStickyNoteAnnotationContent = (point: { x: number; y: number }): AnnotationContent => ({
+  kind: 'sticky-note',
+  x: point.x,
+  y: point.y,
+  width: DEFAULT_STICKY_NOTE_WIDTH,
+  height: DEFAULT_STICKY_NOTE_HEIGHT,
+  color: 'yellow',
+  collapsed: false,
+  text: 'New note',
+  title: 'Sticky note',
+});
+
+const isShapeTool = (tool: AnnotationTool): tool is ShapeTool => tool === 'rectangle' || tool === 'ellipse';
 
 const resolveAnchorPoint = (bounds: CanvasBounds, anchor: ConnectorAnchor): { x: number; y: number } => {
   switch (anchor) {
@@ -345,10 +376,11 @@ export const createOverlayController = (
   let overlayElement: SVGSVGElement | null = null;
   let annotationsLayer: SVGGElement | null = null;
   let draftLayer: SVGGElement | null = null;
-  let draftRectangleElement: SVGRectElement | null = null;
+  let draftShapeElement: SVGElement | null = null;
   let toolbarElement: HTMLDivElement | null = null;
   let toolbarHintElement: HTMLParagraphElement | null = null;
   let toolbarStatusElement: HTMLParagraphElement | null = null;
+  let toolbarDeleteButtonElement: HTMLButtonElement | null = null;
   let toolbarToolButtons = new Map<AnnotationTool, HTMLButtonElement>();
   let interactive = false;
   let annotations: Annotation[] = [];
@@ -356,6 +388,8 @@ export const createOverlayController = (
   let selectedAnnotationId: string | null = null;
   let draftPointerId: number | null = null;
   let draftStartPoint: { x: number; y: number } | null = null;
+  let draftShapeKind: ShapeTool | null = null;
+  let draftBounds: CanvasBounds | null = null;
 
   const getShouldRenderOverlay = (): boolean => interactive || annotations.length > 0 || draftStartPoint !== null;
 
@@ -367,13 +401,20 @@ export const createOverlayController = (
   const getSelectedAnnotation = (): Annotation | undefined =>
     selectedAnnotationId ? annotations.find((annotation) => annotation.id === selectedAnnotationId) : undefined;
 
-  const clearDraftRectangle = (): boolean => {
-    const hadDraft = draftStartPoint !== null || draftRectangleElement !== null || draftPointerId !== null;
+  const clearDraftShape = (): boolean => {
+    const hadDraft =
+      draftStartPoint !== null ||
+      draftShapeElement !== null ||
+      draftPointerId !== null ||
+      draftBounds !== null ||
+      draftShapeKind !== null;
 
     draftPointerId = null;
     draftStartPoint = null;
-    draftRectangleElement?.remove();
-    draftRectangleElement = null;
+    draftShapeKind = null;
+    draftBounds = null;
+    draftShapeElement?.remove();
+    draftShapeElement = null;
 
     return hadDraft;
   };
@@ -398,6 +439,7 @@ export const createOverlayController = (
       toolbarElement = null;
       toolbarHintElement = null;
       toolbarStatusElement = null;
+      toolbarDeleteButtonElement = null;
       toolbarToolButtons = new Map<AnnotationTool, HTMLButtonElement>();
 
       return null;
@@ -471,7 +513,7 @@ export const createOverlayController = (
           setSelection(null, true);
         }
 
-        clearDraftRectangle();
+        clearDraftShape();
         syncToDocument();
         void controllerOptions.onSelectTool?.(tool);
       });
@@ -485,6 +527,27 @@ export const createOverlayController = (
     toolbarStatusElement.style.fontSize = '12px';
     toolbarStatusElement.style.color = '#a5b4fc';
     toolbarElement.append(toolbarStatusElement);
+
+    toolbarDeleteButtonElement = documentRef.createElement('button');
+    toolbarDeleteButtonElement.type = 'button';
+    toolbarDeleteButtonElement.textContent = 'Delete selected';
+    toolbarDeleteButtonElement.style.marginTop = '12px';
+    toolbarDeleteButtonElement.style.marginRight = '8px';
+    toolbarDeleteButtonElement.style.padding = '8px 12px';
+    toolbarDeleteButtonElement.style.border = '1px solid rgba(248, 113, 113, 0.5)';
+    toolbarDeleteButtonElement.style.borderRadius = '999px';
+    toolbarDeleteButtonElement.style.background = 'rgba(127, 29, 29, 0.35)';
+    toolbarDeleteButtonElement.style.color = '#fee2e2';
+    toolbarDeleteButtonElement.style.cursor = 'pointer';
+    toolbarDeleteButtonElement.style.font = 'inherit';
+    toolbarDeleteButtonElement.addEventListener('click', () => {
+      if (!selectedAnnotationId) {
+        return;
+      }
+
+      void controllerOptions.onRunCommand?.('delete-selected-annotation');
+    });
+    toolbarElement.append(toolbarDeleteButtonElement);
 
     const doneButton = documentRef.createElement('button');
     doneButton.type = 'button';
@@ -510,7 +573,7 @@ export const createOverlayController = (
   const updateToolbar = (): void => {
     const mountedToolbar = ensureToolbarMounted();
 
-    if (!mountedToolbar || !toolbarHintElement || !toolbarStatusElement) {
+    if (!mountedToolbar || !toolbarHintElement || !toolbarStatusElement || !toolbarDeleteButtonElement) {
       return;
     }
 
@@ -532,6 +595,9 @@ export const createOverlayController = (
             ? 'No annotations on this page yet.'
             : `${annotations.length} annotation${annotations.length === 1 ? '' : 's'} on this page.`
         }`;
+    toolbarDeleteButtonElement.disabled = selectedAnnotation === undefined;
+    toolbarDeleteButtonElement.style.opacity = selectedAnnotation ? '1' : '0.5';
+    toolbarDeleteButtonElement.style.cursor = selectedAnnotation ? 'pointer' : 'not-allowed';
   };
 
   const ensureMounted = (): SVGSVGElement | null => {
@@ -620,7 +686,7 @@ export const createOverlayController = (
       overlayElement = null;
       annotationsLayer = null;
       draftLayer = null;
-      clearDraftRectangle();
+      clearDraftShape();
       updateToolbar();
 
       return;
@@ -648,55 +714,88 @@ export const createOverlayController = (
     updateToolbar();
   };
 
-  const updateDraftRectangle = (draftRectangle: RectangleAnnotationContent): void => {
-    if (!draftRectangleElement) {
+  const updateDraftShape = (tool: ShapeTool, bounds: CanvasBounds): void => {
+    draftShapeKind = tool;
+    draftBounds = bounds;
+
+    if (
+      draftShapeElement &&
+      ((tool === 'rectangle' && !isSvgTag(draftShapeElement, 'rect')) ||
+        (tool === 'ellipse' && !isSvgTag(draftShapeElement, 'ellipse')))
+    ) {
+      draftShapeElement.remove();
+      draftShapeElement = null;
+    }
+
+    if (!draftShapeElement) {
       ensureMounted();
 
       if (!draftLayer) {
         return;
       }
 
-      draftRectangleElement = documentRef.createElementNS(SVG_NAMESPACE, 'rect');
-      draftRectangleElement.setAttribute('rx', '6');
-      draftRectangleElement.setAttribute('fill', ACCENT_COLOR);
-      draftRectangleElement.setAttribute('fill-opacity', '0.08');
-      draftRectangleElement.setAttribute('stroke', ACCENT_COLOR);
-      draftRectangleElement.setAttribute('stroke-width', '2');
-      draftRectangleElement.setAttribute('stroke-dasharray', '6 4');
-      draftRectangleElement.setAttribute('vector-effect', 'non-scaling-stroke');
-      draftRectangleElement.style.pointerEvents = 'none';
-      draftLayer.append(draftRectangleElement);
+      draftShapeElement = documentRef.createElementNS(SVG_NAMESPACE, tool === 'rectangle' ? 'rect' : 'ellipse');
+      draftShapeElement.setAttribute('fill', ACCENT_COLOR);
+      draftShapeElement.setAttribute('fill-opacity', '0.08');
+      draftShapeElement.setAttribute('stroke', ACCENT_COLOR);
+      draftShapeElement.setAttribute('stroke-width', '2');
+      draftShapeElement.setAttribute('stroke-dasharray', '6 4');
+      draftShapeElement.setAttribute('vector-effect', 'non-scaling-stroke');
+      draftShapeElement.style.pointerEvents = 'none';
+
+      if (isSvgTag(draftShapeElement, 'rect')) {
+        draftShapeElement.setAttribute('rx', '6');
+      }
+
+      draftLayer.append(draftShapeElement);
     }
 
-    draftRectangleElement.setAttribute('x', `${draftRectangle.x}`);
-    draftRectangleElement.setAttribute('y', `${draftRectangle.y}`);
-    draftRectangleElement.setAttribute('width', `${draftRectangle.width}`);
-    draftRectangleElement.setAttribute('height', `${draftRectangle.height}`);
+    if (isSvgTag(draftShapeElement, 'rect')) {
+      draftShapeElement.setAttribute('x', `${bounds.x}`);
+      draftShapeElement.setAttribute('y', `${bounds.y}`);
+      draftShapeElement.setAttribute('width', `${bounds.width}`);
+      draftShapeElement.setAttribute('height', `${bounds.height}`);
+      return;
+    }
+
+    if (isSvgTag(draftShapeElement, 'ellipse')) {
+      draftShapeElement.setAttribute('cx', `${bounds.x + bounds.width / 2}`);
+      draftShapeElement.setAttribute('cy', `${bounds.y + bounds.height / 2}`);
+      draftShapeElement.setAttribute('rx', `${bounds.width / 2}`);
+      draftShapeElement.setAttribute('ry', `${bounds.height / 2}`);
+    }
   };
 
-  const finishRectangle = (): void => {
-    if (!draftStartPoint || !draftRectangleElement) {
-      clearDraftRectangle();
+  const finishShape = (): void => {
+    if (!draftStartPoint || !draftBounds || !draftShapeKind) {
+      clearDraftShape();
 
       return;
     }
 
-    const rectangle = normalizeRectangle(
-      Number(draftRectangleElement.getAttribute('x')),
-      Number(draftRectangleElement.getAttribute('y')),
-      Number(draftRectangleElement.getAttribute('x')) + Number(draftRectangleElement.getAttribute('width')),
-      Number(draftRectangleElement.getAttribute('y')) + Number(draftRectangleElement.getAttribute('height')),
-    );
+    const shapeBounds = { ...draftBounds };
+    const shapeKind = draftShapeKind;
 
-    clearDraftRectangle();
+    clearDraftShape();
 
-    if (rectangle.width < MIN_RECT_SIZE || rectangle.height < MIN_RECT_SIZE) {
+    if (shapeBounds.width < MIN_RECT_SIZE || shapeBounds.height < MIN_RECT_SIZE) {
       syncToDocument();
 
       return;
     }
 
-    void controllerOptions.onCreateAnnotation?.(rectangle);
+    void controllerOptions.onCreateAnnotation?.(
+      shapeKind === 'rectangle'
+        ? {
+            kind: 'rectangle',
+            ...shapeBounds,
+          }
+        : {
+            kind: 'ellipse',
+            ...shapeBounds,
+            color: 'green',
+          },
+    );
     syncToDocument();
   };
 
@@ -730,30 +829,40 @@ export const createOverlayController = (
       return;
     }
 
-    if (activeTool !== 'rectangle') {
+    event.preventDefault();
+
+    if (isShapeTool(activeTool)) {
+      draftPointerId = event.pointerId;
+      draftStartPoint = toPagePoint(event);
+      updateDraftShape(activeTool, {
+        x: draftStartPoint.x,
+        y: draftStartPoint.y,
+        width: 0,
+        height: 0,
+      });
+      overlayElement?.setPointerCapture?.(event.pointerId);
+
       return;
     }
 
-    event.preventDefault();
-    draftPointerId = event.pointerId;
-    draftStartPoint = toPagePoint(event);
-    updateDraftRectangle({
-      kind: 'rectangle',
-      x: draftStartPoint.x,
-      y: draftStartPoint.y,
-      width: 0,
-      height: 0,
-    });
-    overlayElement?.setPointerCapture?.(event.pointerId);
+    if (activeTool === 'text') {
+      void controllerOptions.onCreateAnnotation?.(createTextAnnotationContent(toPagePoint(event)));
+
+      return;
+    }
+
+    if (activeTool === 'sticky-note') {
+      void controllerOptions.onCreateAnnotation?.(createStickyNoteAnnotationContent(toPagePoint(event)));
+    }
   }
 
   function handlePointerMove(event: PointerEvent): void {
-    if (!interactive || activeTool !== 'rectangle' || draftStartPoint === null || draftPointerId !== event.pointerId) {
+    if (!interactive || !isShapeTool(activeTool) || draftStartPoint === null || draftPointerId !== event.pointerId) {
       return;
     }
 
     const point = toPagePoint(event);
-    updateDraftRectangle(normalizeRectangle(draftStartPoint.x, draftStartPoint.y, point.x, point.y));
+    updateDraftShape(activeTool, normalizeBounds(draftStartPoint.x, draftStartPoint.y, point.x, point.y));
   }
 
   function handlePointerUp(event: PointerEvent): void {
@@ -761,7 +870,7 @@ export const createOverlayController = (
       return;
     }
 
-    finishRectangle();
+    finishShape();
   }
 
   function handlePointerCancel(event: PointerEvent): void {
@@ -769,7 +878,7 @@ export const createOverlayController = (
       return;
     }
 
-    clearDraftRectangle();
+    clearDraftShape();
     syncToDocument();
   }
 
@@ -802,7 +911,7 @@ export const createOverlayController = (
   const cancelCurrentAction = (): boolean => {
     let cancelled = false;
 
-    cancelled = clearDraftRectangle() || cancelled;
+    cancelled = clearDraftShape() || cancelled;
     cancelled = setSelection(null, true) || cancelled;
 
     if (cancelled) {
@@ -817,7 +926,7 @@ export const createOverlayController = (
       interactive = enabled;
 
       if (!enabled) {
-        clearDraftRectangle();
+        clearDraftShape();
       }
 
       syncToDocument();
@@ -838,9 +947,7 @@ export const createOverlayController = (
 
       activeTool = tool;
 
-      if (tool !== 'rectangle') {
-        clearDraftRectangle();
-      }
+      clearDraftShape();
 
       if (tool !== 'select') {
         setSelection(null, true);

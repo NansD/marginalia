@@ -72,6 +72,36 @@ const buildAnnotation = (content: AnnotationContent, timestamp: string): Annotat
   }
 };
 
+const getDeletedAnnotationsForSelection = (
+  currentAnnotations: Annotation[],
+  selectedAnnotationId: string | null,
+): Annotation[] => {
+  if (!selectedAnnotationId) {
+    return [];
+  }
+
+  const selectedAnnotation = currentAnnotations.find((annotation) => annotation.id === selectedAnnotationId);
+
+  if (!selectedAnnotation) {
+    return [];
+  }
+
+  if (selectedAnnotation.content.kind === 'connector') {
+    return [selectedAnnotation];
+  }
+
+  return currentAnnotations.filter((annotation) => {
+    if (annotation.id === selectedAnnotation.id) {
+      return true;
+    }
+
+    return (
+      annotation.content.kind === 'connector' &&
+      (annotation.content.sourceId === selectedAnnotation.id || annotation.content.targetId === selectedAnnotation.id)
+    );
+  });
+};
+
 const bootstrapContentScript = async (): Promise<void> => {
   let annotationModeEnabled = false;
   let annotations: Annotation[] = [];
@@ -154,6 +184,43 @@ const bootstrapContentScript = async (): Promise<void> => {
         selectedAnnotationId = null;
         overlayController.runCommand(command);
         break;
+      case 'delete-selected-annotation': {
+        const previousAnnotations = [...annotations];
+        const deletedAnnotations = getDeletedAnnotationsForSelection(annotations, selectedAnnotationId);
+
+        if (deletedAnnotations.length === 0) {
+          break;
+        }
+
+        const annotationCanonicalUrl = canonicalUrl;
+
+        await commandHistory.execute({
+          execute: async () => {
+            for (const annotation of deletedAnnotations) {
+              await adapter.deleteAnnotation(annotationCanonicalUrl, annotation.id);
+            }
+
+            annotations = annotations.filter(
+              (annotation) => !deletedAnnotations.some((deletedAnnotation) => deletedAnnotation.id === annotation.id),
+            );
+            selectedAnnotationId = null;
+            await persistAnnotationsChanged(annotationCanonicalUrl);
+          },
+          undo: async () => {
+            for (const annotation of deletedAnnotations) {
+              await adapter.saveAnnotation(annotationCanonicalUrl, annotation);
+            }
+
+            const restoredAnnotationsById = new Map(
+              [...annotations, ...deletedAnnotations].map((annotation) => [annotation.id, annotation] as const),
+            );
+            annotations = previousAnnotations.filter((annotation) => restoredAnnotationsById.has(annotation.id));
+            selectedAnnotationId = deletedAnnotations[0]?.id ?? null;
+            await persistAnnotationsChanged(annotationCanonicalUrl);
+          },
+        });
+        break;
+      }
     }
 
     return getState();
@@ -189,6 +256,15 @@ const bootstrapContentScript = async (): Promise<void> => {
       }),
     onRequestDisable: async () => {
       await setAnnotationMode(false);
+    },
+    onRunCommand: (command) => {
+      if (command === 'cancel-current-action') {
+        return;
+      }
+
+      void handleAnnotationCommand(command).catch((error: unknown) => {
+        console.error(`Marginalia failed to run annotation command: ${describeError(error)}`);
+      });
     },
     onSelectTool: (tool) => {
       setActiveTool(tool);

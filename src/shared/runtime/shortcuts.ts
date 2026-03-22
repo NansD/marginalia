@@ -9,6 +9,7 @@ export const SHORTCUT_ACTIONS = [
   'ellipseTool',
   'connectorTool',
   'cancelCurrentAction',
+  'deleteSelectedAnnotation',
   'undo',
   'redo',
 ] as const;
@@ -134,6 +135,18 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinitions = {
       primaryModifier: false,
     },
     runtimeMessage: { kind: 'run-annotation-command', command: 'cancel-current-action' },
+  },
+  deleteSelectedAnnotation: {
+    label: 'Delete selected annotation',
+    description: 'Remove the selected annotation from the current page.',
+    section: 'Editing',
+    defaultBinding: {
+      code: 'Backspace',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'run-annotation-command', command: 'delete-selected-annotation' },
   },
   undo: {
     label: 'Undo',
