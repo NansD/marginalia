@@ -1,4 +1,9 @@
 import {
+  ANNOTATION_COMMANDS,
+  ANNOTATION_TOOLS,
+  isRuntimeMessage,
+} from '@/shared/runtime/messages';
+import {
   DEFAULT_SHORTCUT_BINDINGS,
   findMatchingShortcutAction,
   formatShortcut,
@@ -59,5 +64,20 @@ describe('shortcut bindings', () => {
 
   it('declares defaults for each exposed shortcut action', () => {
     expect(Object.keys(DEFAULT_SHORTCUT_BINDINGS).sort()).toEqual(Object.keys(SHORTCUT_DEFINITIONS).sort());
+  });
+
+  it('covers every supported tool and command with shortcut runtime messages', () => {
+    const runtimeMessages = Object.values(SHORTCUT_DEFINITIONS).map((definition) => definition.runtimeMessage);
+    const toolMessages = runtimeMessages.filter((message) => message.kind === 'select-annotation-tool');
+    const commandMessages = runtimeMessages.filter((message) => message.kind === 'run-annotation-command');
+
+    expect(toolMessages.map((message) => message.tool).sort()).toEqual([...ANNOTATION_TOOLS].sort());
+    expect(commandMessages.map((message) => message.command).sort()).toEqual([...ANNOTATION_COMMANDS].sort());
+  });
+
+  it('emits runtime messages that satisfy the shared runtime guard', () => {
+    for (const action of Object.keys(SHORTCUT_DEFINITIONS) as Array<keyof typeof SHORTCUT_DEFINITIONS>) {
+      expect(isRuntimeMessage(getShortcutRuntimeMessage(action))).toBe(true);
+    }
   });
 });

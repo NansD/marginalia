@@ -1,6 +1,8 @@
-import type { Annotation, RectangleAnnotationContent } from '@/shared/models/annotations';
+import type { Annotation, AnnotationContent } from '@/shared/models/annotations';
 import { LocalAdapter } from '@/shared/storage/LocalAdapter';
 import {
+  type AnnotationCommand,
+  type AnnotationTool,
   type ContentScriptState,
   isRuntimeMessage,
   type RuntimeMessage,
@@ -9,10 +11,12 @@ import {
   DEFAULT_SHORTCUT_BINDINGS,
   ensureShortcutBindings,
   findMatchingShortcutAction,
+  SHORTCUT_DEFINITIONS,
   subscribeToShortcutBindings,
 } from '@/shared/runtime/shortcuts';
 import { canonicalizeUrl } from '@/shared/url/canonicalizeUrl';
 
+import { CommandHistory } from './commandHistory';
 import { observePageNavigation } from './navigationObserver';
 import { createOverlayController } from './overlayController';
 
@@ -47,11 +51,35 @@ const createAnnotationId = (): string =>
     ? crypto.randomUUID()
     : `annotation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+const buildAnnotation = (content: AnnotationContent, timestamp: string): Annotation => {
+  const baseAnnotation = {
+    id: createAnnotationId(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  switch (content.kind) {
+    case 'rectangle':
+      return { ...baseAnnotation, type: 'rectangle', content };
+    case 'ellipse':
+      return { ...baseAnnotation, type: 'ellipse', content };
+    case 'text':
+      return { ...baseAnnotation, type: 'text', content };
+    case 'sticky-note':
+      return { ...baseAnnotation, type: 'sticky-note', content };
+    case 'connector':
+      return { ...baseAnnotation, type: 'connector', content };
+  }
+};
+
 const bootstrapContentScript = async (): Promise<void> => {
   let annotationModeEnabled = false;
   let annotations: Annotation[] = [];
   let shortcutBindings = DEFAULT_SHORTCUT_BINDINGS;
   let canonicalUrl = canonicalizeUrl(window.location.href);
+  let activeTool: AnnotationTool = 'rectangle';
+  let selectedAnnotationId: string | null = null;
+  const commandHistory = new CommandHistory();
 
   const publishPageState = async (): Promise<void> => {
     await sendRuntimeMessage({
@@ -64,13 +92,21 @@ const bootstrapContentScript = async (): Promise<void> => {
 
   const syncOverlay = (): void => {
     overlayController.setAnnotations(annotations);
+    overlayController.setActiveTool(activeTool);
+    overlayController.setSelection(selectedAnnotationId);
     overlayController.setInteractive(annotationModeEnabled);
     overlayController.syncToDocument();
   };
 
   const loadAnnotations = async (): Promise<void> => {
     annotations = await adapter.getAnnotations(canonicalUrl);
+
+    if (selectedAnnotationId && !annotations.some((annotation) => annotation.id === selectedAnnotationId)) {
+      selectedAnnotationId = null;
+    }
+
     overlayController.setAnnotations(annotations);
+    overlayController.setSelection(selectedAnnotationId);
   };
 
   const getState = (): ContentScriptState => ({
@@ -86,21 +122,64 @@ const bootstrapContentScript = async (): Promise<void> => {
     return getState();
   };
 
-  const handleCreateAnnotation = async (content: RectangleAnnotationContent): Promise<void> => {
+  const persistAnnotationsChanged = async (targetCanonicalUrl = canonicalUrl): Promise<void> => {
+    syncOverlay();
+    await sendRuntimeMessage({ kind: 'annotations-changed', canonicalUrl: targetCanonicalUrl });
+  };
+
+  const setActiveTool = (tool: AnnotationTool): ContentScriptState => {
+    activeTool = tool;
+
+    if (tool !== 'select') {
+      selectedAnnotationId = null;
+    }
+
+    overlayController.setActiveTool(activeTool);
+    overlayController.setSelection(selectedAnnotationId);
+
+    return getState();
+  };
+
+  const handleAnnotationCommand = async (command: AnnotationCommand): Promise<ContentScriptState> => {
+    switch (command) {
+      case 'undo':
+        await commandHistory.undo();
+        syncOverlay();
+        break;
+      case 'redo':
+        await commandHistory.redo();
+        syncOverlay();
+        break;
+      case 'cancel-current-action':
+        selectedAnnotationId = null;
+        overlayController.runCommand(command);
+        break;
+    }
+
+    return getState();
+  };
+
+  const handleCreateAnnotation = async (content: AnnotationContent): Promise<void> => {
     const timestamp = new Date().toISOString();
-    const annotation: Annotation = {
-      id: createAnnotationId(),
-      type: 'rectangle',
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      content,
-    };
+    const annotation = buildAnnotation(content, timestamp);
+    const annotationCanonicalUrl = canonicalUrl;
 
-    const savedAnnotation = await adapter.saveAnnotation(canonicalUrl, annotation);
-
-    annotations = [...annotations, savedAnnotation];
-    overlayController.setAnnotations(annotations);
-    await sendRuntimeMessage({ kind: 'annotations-changed', canonicalUrl });
+    await commandHistory.execute({
+      execute: async () => {
+        const savedAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, annotation);
+        annotations = annotations.filter((existingAnnotation) => existingAnnotation.id !== savedAnnotation.id);
+        annotations = [...annotations, savedAnnotation];
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+      undo: async () => {
+        await adapter.deleteAnnotation(annotationCanonicalUrl, annotation.id);
+        annotations = annotations.filter((existingAnnotation) => existingAnnotation.id !== annotation.id);
+        if (selectedAnnotationId === annotation.id) {
+          selectedAnnotationId = null;
+        }
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+    });
   };
 
   const overlayController = createOverlayController(document, window, {
@@ -111,9 +190,32 @@ const bootstrapContentScript = async (): Promise<void> => {
     onRequestDisable: async () => {
       await setAnnotationMode(false);
     },
+    onSelectTool: (tool) => {
+      setActiveTool(tool);
+    },
+    onSelectionChange: (annotationId) => {
+      selectedAnnotationId = annotationId;
+    },
   });
 
   const toggleAnnotationMode = async (): Promise<ContentScriptState> => setAnnotationMode(!annotationModeEnabled);
+
+  const dispatchRuntimeMessage = async (message: RuntimeMessage): Promise<ContentScriptState | undefined> => {
+    switch (message.kind) {
+      case 'request-page-state':
+        return getState();
+      case 'set-annotation-mode':
+        return setAnnotationMode(message.enabled);
+      case 'toggle-annotation-mode':
+        return toggleAnnotationMode();
+      case 'select-annotation-tool':
+        return setActiveTool(message.tool);
+      case 'run-annotation-command':
+        return handleAnnotationCommand(message.command);
+      default:
+        return undefined;
+    }
+  };
 
   document.addEventListener(
     'keydown',
@@ -124,12 +226,12 @@ const bootstrapContentScript = async (): Promise<void> => {
 
       const matchedAction = findMatchingShortcutAction(shortcutBindings, event);
 
-      if (matchedAction !== 'toggleAnnotationMode') {
+      if (!matchedAction) {
         return;
       }
 
       event.preventDefault();
-      void toggleAnnotationMode();
+      void dispatchRuntimeMessage(SHORTCUT_DEFINITIONS[matchedAction].runtimeMessage);
     },
     true,
   );
@@ -139,30 +241,22 @@ const bootstrapContentScript = async (): Promise<void> => {
       return undefined;
     }
 
-    const respondWithState = (promise: Promise<ContentScriptState>): true => {
-      void promise.then((state) => {
-        sendResponse(state);
-      });
+    if (message.kind === 'request-page-state') {
+      sendResponse(getState());
 
-      return true;
-    };
-
-    switch (message.kind) {
-      case 'request-page-state':
-        sendResponse(getState());
-
-        return false;
-      case 'set-annotation-mode':
-        return respondWithState(setAnnotationMode(message.enabled));
-      case 'toggle-annotation-mode':
-        return respondWithState(toggleAnnotationMode());
-      default:
-        return undefined;
+      return false;
     }
+
+    void dispatchRuntimeMessage(message).then((state) => {
+      sendResponse(state);
+    });
+
+    return true;
   });
 
   observePageNavigation(({ canonicalUrl: nextCanonicalUrl }) => {
     canonicalUrl = nextCanonicalUrl;
+    commandHistory.clear();
     void loadAnnotations()
       .then(() => {
         overlayController.syncToDocument();

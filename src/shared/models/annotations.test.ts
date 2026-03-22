@@ -3,44 +3,39 @@ import {
   isCanvasAnnotation,
   isConnectorAnnotation,
   isRectangleAnnotation,
-  type Annotation,
 } from '@/shared/models/annotations';
-
-const rectangleAnnotation: Annotation = {
-  id: 'annotation-rectangle',
-  type: 'rectangle',
-  createdAt: '2025-01-01T00:00:00.000Z',
-  updatedAt: '2025-01-01T00:00:00.000Z',
-  content: {
-    kind: 'rectangle',
-    x: 16,
-    y: 24,
-    width: 120,
-    height: 80,
-  },
-};
-
-const connectorAnnotation: Annotation = {
-  id: 'annotation-connector',
-  type: 'connector',
-  createdAt: '2025-01-01T00:00:00.000Z',
-  updatedAt: '2025-01-01T00:00:00.000Z',
-  content: {
-    kind: 'connector',
-    sourceId: 'annotation-rectangle',
-    sourceAnchor: 'right',
-    targetId: 'annotation-text',
-    targetAnchor: 'left',
-    color: 'blue',
-    label: 'relates to',
-  },
-};
+import {
+  buildConnectorAnnotation,
+  buildEllipseAnnotation,
+  buildPageRecord,
+  buildRectangleAnnotation,
+  buildStickyNoteAnnotation,
+  buildTextAnnotation,
+} from '@/test/factories';
 
 describe('annotation models', () => {
-  it('narrows structured annotation unions with runtime guards', () => {
+  it('classifies the supported v1 annotation shapes with runtime guards', () => {
+    const rectangleAnnotation = buildRectangleAnnotation();
+    const ellipseAnnotation = buildEllipseAnnotation();
+    const textAnnotation = buildTextAnnotation();
+    const stickyNoteAnnotation = buildStickyNoteAnnotation();
+    const connectorAnnotation = buildConnectorAnnotation();
+
     expect(isRectangleAnnotation(rectangleAnnotation)).toBe(true);
     expect(isCanvasAnnotation(rectangleAnnotation)).toBe(true);
     expect(isConnectorAnnotation(rectangleAnnotation)).toBe(false);
+
+    expect(isRectangleAnnotation(ellipseAnnotation)).toBe(false);
+    expect(isCanvasAnnotation(ellipseAnnotation)).toBe(true);
+    expect(isConnectorAnnotation(ellipseAnnotation)).toBe(false);
+
+    expect(isRectangleAnnotation(textAnnotation)).toBe(false);
+    expect(isCanvasAnnotation(textAnnotation)).toBe(true);
+    expect(isConnectorAnnotation(textAnnotation)).toBe(false);
+
+    expect(isRectangleAnnotation(stickyNoteAnnotation)).toBe(false);
+    expect(isCanvasAnnotation(stickyNoteAnnotation)).toBe(true);
+    expect(isConnectorAnnotation(stickyNoteAnnotation)).toBe(false);
 
     expect(isRectangleAnnotation(connectorAnnotation)).toBe(false);
     expect(isCanvasAnnotation(connectorAnnotation)).toBe(false);
@@ -55,5 +50,32 @@ describe('annotation models', () => {
     expect(record.tags).toEqual([]);
     expect(record.annotations).toEqual([]);
     expect(typeof record.lastVisited).toBe('string');
+  });
+
+  it('builds rich page record fixtures for content-layer tests', () => {
+    const annotations = [
+      buildRectangleAnnotation('annotation-rectangle'),
+      buildTextAnnotation('annotation-text'),
+      buildConnectorAnnotation('annotation-connector', {
+        content: {
+          sourceId: 'annotation-rectangle',
+          targetId: 'annotation-text',
+        },
+      }),
+    ];
+
+    const record = buildPageRecord('https://example.com/annotated', {
+      pageTitle: 'Annotated example',
+      tags: ['research', 'draft'],
+      annotations,
+    });
+
+    expect(record).toEqual({
+      canonicalUrl: 'https://example.com/annotated',
+      pageTitle: 'Annotated example',
+      lastVisited: '2025-01-01T00:00:00.000Z',
+      tags: ['research', 'draft'],
+      annotations,
+    });
   });
 });
