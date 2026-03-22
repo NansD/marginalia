@@ -30,7 +30,12 @@ export const createLocalAdapterDatabaseOpener =
       },
     });
 
-export const openLocalAdapterDatabase = createLocalAdapterDatabaseOpener();
+const getConfiguredLocalAdapterDatabaseName = (): string =>
+  (globalThis as { __MARGINALIA_LOCAL_ADAPTER_DB_NAME__?: string }).__MARGINALIA_LOCAL_ADAPTER_DB_NAME__ ??
+  LOCAL_ADAPTER_DB_NAME;
+
+export const openLocalAdapterDatabase = (): Promise<IDBPDatabase<MarginaliaDatabase>> =>
+  createLocalAdapterDatabaseOpener(getConfiguredLocalAdapterDatabaseName())();
 
 export const resetLocalAdapterDatabase = async (databaseName = LOCAL_ADAPTER_DB_NAME): Promise<void> => {
   await deleteDB(databaseName);

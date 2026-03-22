@@ -352,6 +352,57 @@ describe('createOverlayController', () => {
     expect(onRunCommand).toHaveBeenCalledWith('delete-selected-annotation');
   });
 
+  it('opens editor controls for selected text annotations and saves edits', () => {
+    const onEditAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+
+    controller.setAnnotations([buildTextAnnotation('annotation-text')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-text"]');
+
+    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 12 });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit selected' }));
+    fireEvent.input(screen.getByLabelText('Annotation text'), {
+      target: { value: 'Updated annotation copy' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-text',
+      expect.objectContaining({
+        kind: 'text',
+        text: 'Updated annotation copy',
+      }),
+    );
+  });
+
+  it('opens editor controls on double click for sticky notes and cancels cleanly', () => {
+    const onEditAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+
+    controller.setAnnotations([buildStickyNoteAnnotation('annotation-sticky-note')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector(
+      '[data-marginalia-annotation-id="annotation-sticky-note"]',
+    );
+
+    fireEvent.doubleClick(annotationElement!);
+
+    expect(screen.getByLabelText('Sticky note title')).toHaveValue('Note');
+    expect(screen.getByLabelText('Sticky note text')).toHaveValue('Remember this detail');
+
+    fireEvent.input(screen.getByLabelText('Sticky note title'), { target: { value: 'Revised note' } });
+    fireEvent.input(screen.getByLabelText('Sticky note text'), { target: { value: 'A better sticky note body' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByLabelText('Sticky note title')).not.toBeInTheDocument();
+    expect(onEditAnnotation).not.toHaveBeenCalled();
+  });
+
   it('drags selected canvas annotations in select mode and keeps connectors aligned', () => {
     const onMoveAnnotation = vi.fn();
     const controller = createOverlayController(document, window, { onMoveAnnotation });

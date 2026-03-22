@@ -71,6 +71,7 @@ export interface OverlayController {
 
 export interface OverlayControllerOptions {
   onCreateAnnotation?: (content: AnnotationContent) => Promise<void> | void;
+  onEditAnnotation?: (annotationId: string, content: AnnotationContent) => Promise<void> | void;
   onMoveAnnotation?: (annotationId: string, bounds: CanvasBounds) => Promise<void> | void;
   onRequestDisable?: () => Promise<void> | void;
   onRunCommand?: (command: AnnotationCommand) => Promise<void> | void;
@@ -83,6 +84,19 @@ type OverlayWindow = Window & {
 };
 
 type ShapeTool = Extract<AnnotationTool, 'ellipse' | 'rectangle'>;
+type EditableAnnotation = TextAnnotation | StickyNoteAnnotation;
+type EditingDraft =
+  | {
+      annotationId: string;
+      kind: 'text';
+      text: string;
+    }
+  | {
+      annotationId: string;
+      kind: 'sticky-note';
+      title: string;
+      text: string;
+    };
 
 const isSvgTag = (element: Element | null, tagName: string): boolean =>
   element?.tagName.toLowerCase() === tagName;
@@ -161,6 +175,57 @@ const createStickyNoteAnnotationContent = (point: { x: number; y: number }): Ann
 });
 
 const isShapeTool = (tool: AnnotationTool): tool is ShapeTool => tool === 'rectangle' || tool === 'ellipse';
+const isEditableAnnotation = (annotation: Annotation | undefined): annotation is EditableAnnotation =>
+  annotation?.type === 'text' || annotation?.type === 'sticky-note';
+
+const createMultilineText = (
+  documentRef: Document,
+  lines: string[],
+  options: {
+    x: number;
+    y: number;
+    fill: string;
+    fontSize: number;
+    fontFamily: string;
+    fontWeight?: string;
+    lineHeight: number;
+  },
+): SVGTextElement => {
+  const text = documentRef.createElementNS(SVG_NAMESPACE, 'text');
+
+  text.setAttribute('x', `${options.x}`);
+  text.setAttribute('y', `${options.y}`);
+  text.setAttribute('fill', options.fill);
+  text.setAttribute('font-size', `${options.fontSize}`);
+  text.setAttribute('font-family', options.fontFamily);
+  text.setAttribute('dominant-baseline', 'hanging');
+
+  if (options.fontWeight) {
+    text.setAttribute('font-weight', options.fontWeight);
+  }
+
+  lines.forEach((line, index) => {
+    const span = documentRef.createElementNS(SVG_NAMESPACE, 'tspan');
+    span.setAttribute('x', `${options.x}`);
+
+    if (index === 0) {
+      span.setAttribute('dy', '0');
+    } else {
+      span.setAttribute('dy', `${options.lineHeight}`);
+    }
+
+    span.textContent = line === '' ? ' ' : line;
+    text.append(span);
+  });
+
+  return text;
+};
+
+const getMultilineAnnotationText = (text: string): string[] => {
+  const lines = text.split('\n').slice(0, 6);
+
+  return lines.length > 0 ? lines : [''];
+};
 
 const resolveAnchorPoint = (bounds: CanvasBounds, anchor: ConnectorAnchor): { x: number; y: number } => {
   switch (anchor) {
@@ -274,7 +339,14 @@ const createTextElement = (
   const group = documentRef.createElementNS(SVG_NAMESPACE, 'g');
   const accentColor = selected ? SELECTED_STROKE_COLOR : getAnnotationColor(annotation.content.color);
   const outline = documentRef.createElementNS(SVG_NAMESPACE, 'rect');
-  const label = documentRef.createElementNS(SVG_NAMESPACE, 'text');
+  const label = createMultilineText(documentRef, getMultilineAnnotationText(annotation.content.text), {
+    x: annotation.content.x + 12,
+    y: annotation.content.y + 12,
+    fill: '#0f172a',
+    fontSize: 15,
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    lineHeight: 18,
+  });
 
   outline.setAttribute('x', `${annotation.content.x}`);
   outline.setAttribute('y', `${annotation.content.y}`);
@@ -287,14 +359,6 @@ const createTextElement = (
   outline.setAttribute('stroke-width', selected ? '3' : '1.5');
   outline.setAttribute('stroke-dasharray', '6 4');
   outline.setAttribute('vector-effect', 'non-scaling-stroke');
-
-  label.setAttribute('x', `${annotation.content.x + 12}`);
-  label.setAttribute('y', `${annotation.content.y + 12}`);
-  label.setAttribute('fill', '#0f172a');
-  label.setAttribute('font-size', '15');
-  label.setAttribute('font-family', 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
-  label.setAttribute('dominant-baseline', 'hanging');
-  label.textContent = annotation.content.text;
 
   group.append(outline, label);
   setAnnotationElementState(group, annotation, interactive, activeTool, selected);
@@ -312,8 +376,27 @@ const createStickyNoteElement = (
   const group = documentRef.createElementNS(SVG_NAMESPACE, 'g');
   const accentColor = selected ? SELECTED_STROKE_COLOR : getAnnotationColor(annotation.content.color);
   const note = documentRef.createElementNS(SVG_NAMESPACE, 'rect');
-  const title = documentRef.createElementNS(SVG_NAMESPACE, 'text');
-  const body = documentRef.createElementNS(SVG_NAMESPACE, 'text');
+  const title = createMultilineText(documentRef, getMultilineAnnotationText(annotation.content.title ?? 'Sticky note'), {
+    x: annotation.content.x + 12,
+    y: annotation.content.y + 10,
+    fill: '#0f172a',
+    fontSize: 12,
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontWeight: '700',
+    lineHeight: 14,
+  });
+  const body = createMultilineText(
+    documentRef,
+    getMultilineAnnotationText(annotation.content.collapsed ? 'Collapsed note' : annotation.content.text),
+    {
+      x: annotation.content.x + 12,
+      y: annotation.content.y + 30,
+      fill: '#1e293b',
+      fontSize: 12,
+      fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      lineHeight: 14,
+    },
+  );
 
   note.setAttribute('x', `${annotation.content.x}`);
   note.setAttribute('y', `${annotation.content.y}`);
@@ -325,23 +408,6 @@ const createStickyNoteElement = (
   note.setAttribute('stroke', accentColor);
   note.setAttribute('stroke-width', selected ? '3' : '2');
   note.setAttribute('vector-effect', 'non-scaling-stroke');
-
-  title.setAttribute('x', `${annotation.content.x + 12}`);
-  title.setAttribute('y', `${annotation.content.y + 10}`);
-  title.setAttribute('fill', '#0f172a');
-  title.setAttribute('font-size', '12');
-  title.setAttribute('font-weight', '700');
-  title.setAttribute('font-family', 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
-  title.setAttribute('dominant-baseline', 'hanging');
-  title.textContent = annotation.content.title ?? 'Sticky note';
-
-  body.setAttribute('x', `${annotation.content.x + 12}`);
-  body.setAttribute('y', `${annotation.content.y + 30}`);
-  body.setAttribute('fill', '#1e293b');
-  body.setAttribute('font-size', '12');
-  body.setAttribute('font-family', 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
-  body.setAttribute('dominant-baseline', 'hanging');
-  body.textContent = annotation.content.collapsed ? 'Collapsed note' : annotation.content.text;
 
   group.append(note, title, body);
   setAnnotationElementState(group, annotation, interactive, activeTool, selected);
@@ -425,12 +491,15 @@ export const createOverlayController = (
   let toolbarElement: HTMLDivElement | null = null;
   let toolbarHintElement: HTMLParagraphElement | null = null;
   let toolbarStatusElement: HTMLParagraphElement | null = null;
+  let toolbarEditSectionElement: HTMLDivElement | null = null;
   let toolbarDeleteButtonElement: HTMLButtonElement | null = null;
   let toolbarToolButtons = new Map<AnnotationTool, HTMLButtonElement>();
   let interactive = false;
   let annotations: Annotation[] = [];
   let activeTool: AnnotationTool = 'rectangle';
   let selectedAnnotationId: string | null = null;
+  let editingDraft: EditingDraft | null = null;
+  let editingSavePending = false;
   let draftPointerId: number | null = null;
   let draftStartPoint: { x: number; y: number } | null = null;
   let draftShapeKind: ShapeTool | null = null;
@@ -468,6 +537,18 @@ export const createOverlayController = (
     getCanvasAnnotationById(connectorSourceAnnotationId);
 
   const getDraggedAnnotation = (): CanvasAnnotation | undefined => getCanvasAnnotationById(dragAnnotationId);
+
+  const getEditingAnnotation = (): EditableAnnotation | undefined => {
+    const currentEditingDraft = editingDraft;
+
+    if (!currentEditingDraft) {
+      return undefined;
+    }
+
+    const annotation = annotations.find((candidate) => candidate.id === currentEditingDraft.annotationId);
+
+    return isEditableAnnotation(annotation) ? annotation : undefined;
+  };
 
   const clearDraftShape = (): boolean => {
     const hadDraft =
@@ -515,12 +596,60 @@ export const createOverlayController = (
     return hadDraggedAnnotation;
   };
 
+  const clearEditingDraft = (): boolean => {
+    const hadEditingDraft = editingDraft !== null || editingSavePending;
+
+    editingDraft = null;
+    editingSavePending = false;
+
+    return hadEditingDraft;
+  };
+
+  const startEditingSelection = (annotationId = selectedAnnotationId): boolean => {
+    const nextAnnotation = annotationId ? annotations.find((candidate) => candidate.id === annotationId) : undefined;
+
+    if (!isEditableAnnotation(nextAnnotation)) {
+      return false;
+    }
+
+    const annotation = nextAnnotation;
+
+    editingSavePending = false;
+    editingDraft =
+      annotation.type === 'text'
+        ? {
+            annotationId: annotation.id,
+            kind: 'text',
+            text: annotation.content.text,
+          }
+        : {
+            annotationId: annotation.id,
+            kind: 'sticky-note',
+            title: annotation.content.title ?? '',
+            text: annotation.content.text,
+          };
+
+    if (selectedAnnotationId !== annotation.id) {
+      setSelection(annotation.id, true);
+    }
+
+    clearDraftShape();
+    clearConnectorDraft();
+    clearDraggedAnnotation();
+
+    return true;
+  };
+
   const setSelection = (annotationId: string | null, notify = false): boolean => {
     if (selectedAnnotationId === annotationId) {
       return false;
     }
 
     selectedAnnotationId = annotationId;
+
+    if (editingDraft && editingDraft.annotationId !== annotationId) {
+      clearEditingDraft();
+    }
 
     if (notify) {
       void controllerOptions.onSelectionChange?.(annotationId);
@@ -529,12 +658,204 @@ export const createOverlayController = (
     return true;
   };
 
+  const updateToolbarEditSection = (): void => {
+    if (!toolbarEditSectionElement) {
+      return;
+    }
+
+    const selectedAnnotation = getSelectedAnnotation();
+    const editableSelectedAnnotation = isEditableAnnotation(selectedAnnotation) ? selectedAnnotation : undefined;
+
+    toolbarEditSectionElement.replaceChildren();
+
+    if (!editableSelectedAnnotation) {
+      return;
+    }
+
+    const controlsRow = documentRef.createElement('div');
+    controlsRow.style.display = 'flex';
+    controlsRow.style.flexWrap = 'wrap';
+    controlsRow.style.gap = '8px';
+    controlsRow.style.marginTop = '12px';
+
+    if (!editingDraft || editingDraft.annotationId !== editableSelectedAnnotation.id) {
+      const editButton = documentRef.createElement('button');
+      editButton.type = 'button';
+      editButton.textContent = 'Edit selected';
+      editButton.style.padding = '8px 12px';
+      editButton.style.border = '1px solid rgba(129, 140, 248, 0.5)';
+      editButton.style.borderRadius = '999px';
+      editButton.style.background = 'rgba(67, 56, 202, 0.24)';
+      editButton.style.color = '#eef2ff';
+      editButton.style.cursor = 'pointer';
+      editButton.style.font = 'inherit';
+      editButton.addEventListener('click', () => {
+        if (!startEditingSelection(editableSelectedAnnotation.id)) {
+          return;
+        }
+
+        syncToDocument();
+      });
+      controlsRow.append(editButton);
+      toolbarEditSectionElement.append(controlsRow);
+
+      return;
+    }
+
+    const heading = documentRef.createElement('p');
+    heading.textContent =
+      editingDraft.kind === 'text' ? 'Editing text annotation' : 'Editing sticky note';
+    heading.style.margin = '12px 0 0';
+    heading.style.fontSize = '12px';
+    heading.style.fontWeight = '600';
+    heading.style.color = '#e0e7ff';
+    toolbarEditSectionElement.append(heading);
+
+    const fieldLabelStyle = {
+      display: 'block',
+      marginTop: '8px',
+      fontSize: '12px',
+      color: '#cbd5e1',
+    } as const;
+
+    if (editingDraft.kind === 'sticky-note') {
+      const titleLabel = documentRef.createElement('label');
+      titleLabel.textContent = 'Title';
+      Object.assign(titleLabel.style, fieldLabelStyle);
+
+      const titleInput = documentRef.createElement('input');
+      titleInput.type = 'text';
+      titleInput.value = editingDraft.title;
+      titleInput.setAttribute('aria-label', 'Sticky note title');
+      titleInput.style.width = '100%';
+      titleInput.style.marginTop = '4px';
+      titleInput.style.padding = '8px 10px';
+      titleInput.style.borderRadius = '10px';
+      titleInput.style.border = '1px solid rgba(148, 163, 184, 0.4)';
+      titleInput.style.background = 'rgba(15, 23, 42, 0.82)';
+      titleInput.style.color = '#f8fafc';
+      titleInput.style.font = 'inherit';
+      titleInput.addEventListener('input', () => {
+        if (editingDraft?.kind !== 'sticky-note') {
+          return;
+        }
+
+        editingDraft = {
+          ...editingDraft,
+          title: titleInput.value,
+        };
+      });
+      titleLabel.append(titleInput);
+      toolbarEditSectionElement.append(titleLabel);
+    }
+
+    const bodyLabel = documentRef.createElement('label');
+    bodyLabel.textContent = editingDraft.kind === 'text' ? 'Text' : 'Note';
+    Object.assign(bodyLabel.style, fieldLabelStyle);
+
+    const bodyInput = documentRef.createElement('textarea');
+    bodyInput.value = editingDraft.text;
+    bodyInput.setAttribute('aria-label', editingDraft.kind === 'text' ? 'Annotation text' : 'Sticky note text');
+    bodyInput.rows = editingDraft.kind === 'text' ? 3 : 5;
+    bodyInput.style.width = '100%';
+    bodyInput.style.minHeight = editingDraft.kind === 'text' ? '88px' : '120px';
+    bodyInput.style.marginTop = '4px';
+    bodyInput.style.padding = '8px 10px';
+    bodyInput.style.borderRadius = '10px';
+    bodyInput.style.border = '1px solid rgba(148, 163, 184, 0.4)';
+    bodyInput.style.background = 'rgba(15, 23, 42, 0.82)';
+    bodyInput.style.color = '#f8fafc';
+    bodyInput.style.font = 'inherit';
+    bodyInput.style.resize = 'vertical';
+    bodyInput.addEventListener('input', () => {
+      if (!editingDraft) {
+        return;
+      }
+
+      editingDraft = {
+        ...editingDraft,
+        text: bodyInput.value,
+      };
+    });
+    bodyLabel.append(bodyInput);
+    toolbarEditSectionElement.append(bodyLabel);
+
+    const saveButton = documentRef.createElement('button');
+    saveButton.type = 'button';
+    saveButton.textContent = editingSavePending ? 'Saving…' : 'Save changes';
+    saveButton.disabled = editingSavePending;
+    saveButton.style.padding = '8px 12px';
+    saveButton.style.border = '0';
+    saveButton.style.borderRadius = '999px';
+    saveButton.style.background = '#c7d2fe';
+    saveButton.style.color = '#312e81';
+    saveButton.style.cursor = editingSavePending ? 'progress' : 'pointer';
+    saveButton.style.font = 'inherit';
+
+    const cancelButton = documentRef.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.textContent = 'Cancel';
+    cancelButton.disabled = editingSavePending;
+    cancelButton.style.padding = '8px 12px';
+    cancelButton.style.border = '1px solid rgba(148, 163, 184, 0.4)';
+    cancelButton.style.borderRadius = '999px';
+    cancelButton.style.background = 'transparent';
+    cancelButton.style.color = '#e2e8f0';
+    cancelButton.style.cursor = editingSavePending ? 'not-allowed' : 'pointer';
+    cancelButton.style.font = 'inherit';
+
+    cancelButton.addEventListener('click', () => {
+      if (!clearEditingDraft()) {
+        return;
+      }
+
+      syncToDocument();
+    });
+
+    saveButton.addEventListener('click', () => {
+      const currentDraft = editingDraft;
+      const currentAnnotation = getEditingAnnotation();
+
+      if (!currentDraft || !currentAnnotation) {
+        return;
+      }
+
+      const nextContent =
+        currentDraft.kind === 'text'
+          ? {
+              ...currentAnnotation.content,
+              text: currentDraft.text,
+            }
+          : {
+              ...currentAnnotation.content,
+              title: currentDraft.title,
+              text: currentDraft.text,
+            };
+
+      editingSavePending = true;
+      syncToDocument();
+      void Promise.resolve(controllerOptions.onEditAnnotation?.(currentAnnotation.id, nextContent))
+        .then(() => {
+          clearEditingDraft();
+          syncToDocument();
+        })
+        .catch(() => {
+          editingSavePending = false;
+          syncToDocument();
+        });
+    });
+
+    controlsRow.append(saveButton, cancelButton);
+    toolbarEditSectionElement.append(controlsRow);
+  };
+
   const ensureToolbarMounted = (): HTMLDivElement | null => {
     if (!interactive) {
       toolbarElement?.remove();
       toolbarElement = null;
       toolbarHintElement = null;
       toolbarStatusElement = null;
+      toolbarEditSectionElement = null;
       toolbarDeleteButtonElement = null;
       toolbarToolButtons = new Map<AnnotationTool, HTMLButtonElement>();
 
@@ -646,6 +967,10 @@ export const createOverlayController = (
     });
     toolbarElement.append(toolbarDeleteButtonElement);
 
+    toolbarEditSectionElement = documentRef.createElement('div');
+    toolbarEditSectionElement.style.marginTop = '4px';
+    toolbarElement.append(toolbarEditSectionElement);
+
     const doneButton = documentRef.createElement('button');
     doneButton.type = 'button';
     doneButton.textContent = 'Done';
@@ -670,7 +995,13 @@ export const createOverlayController = (
   const updateToolbar = (): void => {
     const mountedToolbar = ensureToolbarMounted();
 
-    if (!mountedToolbar || !toolbarHintElement || !toolbarStatusElement || !toolbarDeleteButtonElement) {
+    if (
+      !mountedToolbar ||
+      !toolbarHintElement ||
+      !toolbarStatusElement ||
+      !toolbarDeleteButtonElement ||
+      !toolbarEditSectionElement
+    ) {
       return;
     }
 
@@ -699,6 +1030,7 @@ export const createOverlayController = (
     toolbarDeleteButtonElement.disabled = selectedAnnotation === undefined;
     toolbarDeleteButtonElement.style.opacity = selectedAnnotation ? '1' : '0.5';
     toolbarDeleteButtonElement.style.cursor = selectedAnnotation ? 'pointer' : 'not-allowed';
+    updateToolbarEditSection();
   };
 
   const ensureMounted = (): SVGSVGElement | null => {
@@ -735,6 +1067,7 @@ export const createOverlayController = (
     overlayElement.append(draftLayer);
 
     overlayElement.addEventListener('pointerdown', handlePointerDown);
+    overlayElement.addEventListener('dblclick', handleDoubleClick);
     overlayElement.addEventListener('pointermove', handlePointerMove);
     overlayElement.addEventListener('pointerup', handlePointerUp);
     overlayElement.addEventListener('pointercancel', handlePointerCancel);
@@ -948,8 +1281,36 @@ export const createOverlayController = (
     return annotationElement?.getAttribute('data-marginalia-annotation-id') ?? null;
   };
 
+  function handleDoubleClick(event: MouseEvent): void {
+    if (!interactive || activeTool !== 'select') {
+      return;
+    }
+
+    const eventTarget = event.target;
+
+    if (!(eventTarget instanceof Element)) {
+      return;
+    }
+
+    const annotationId =
+      eventTarget.closest('[data-marginalia-annotation-id]')?.getAttribute('data-marginalia-annotation-id') ?? null;
+
+    if (!annotationId || !startEditingSelection(annotationId)) {
+      return;
+    }
+
+    event.preventDefault();
+    syncToDocument();
+  }
+
   function handlePointerDown(event: PointerEvent): void {
     if (!interactive || event.button !== 0) {
+      return;
+    }
+
+    if (editingDraft) {
+      event.preventDefault();
+
       return;
     }
 
@@ -1163,6 +1524,7 @@ export const createOverlayController = (
   const cancelCurrentAction = (): boolean => {
     let cancelled = false;
 
+    cancelled = clearEditingDraft() || cancelled;
     cancelled = clearDraftShape() || cancelled;
     cancelled = clearConnectorDraft() || cancelled;
     cancelled = clearDraggedAnnotation() || cancelled;
@@ -1180,6 +1542,7 @@ export const createOverlayController = (
       interactive = enabled;
 
       if (!enabled) {
+        clearEditingDraft();
         clearDraftShape();
         clearConnectorDraft();
         clearDraggedAnnotation();
@@ -1189,9 +1552,14 @@ export const createOverlayController = (
     },
     setAnnotations(nextAnnotations) {
       annotations = [...nextAnnotations];
+      const currentEditingDraft = editingDraft;
 
       if (selectedAnnotationId && !annotations.some((annotation) => annotation.id === selectedAnnotationId)) {
         setSelection(null, true);
+      }
+
+      if (currentEditingDraft && !annotations.some((annotation) => annotation.id === currentEditingDraft.annotationId)) {
+        clearEditingDraft();
       }
 
       if (!getPendingConnectorSourceAnnotation()) {
@@ -1211,6 +1579,7 @@ export const createOverlayController = (
 
       activeTool = tool;
 
+      clearEditingDraft();
       clearDraftShape();
       clearConnectorDraft();
       clearDraggedAnnotation();

@@ -125,6 +125,9 @@ const updateAnnotationBounds = <T extends CanvasAnnotation>(
   },
 }) as T;
 
+const areAnnotationContentsEqual = (left: AnnotationContent, right: AnnotationContent): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
 const bootstrapContentScript = async (): Promise<void> => {
   let annotationModeEnabled = false;
   let annotations: Annotation[] = [];
@@ -314,10 +317,65 @@ const bootstrapContentScript = async (): Promise<void> => {
     });
   };
 
+  const handleEditAnnotation = async (annotationId: string, content: AnnotationContent): Promise<void> => {
+    const currentAnnotation = annotations.find((annotation) => annotation.id === annotationId);
+
+    if (
+      !currentAnnotation ||
+      (currentAnnotation.type !== 'text' && currentAnnotation.type !== 'sticky-note') ||
+      currentAnnotation.content.kind !== content.kind ||
+      areAnnotationContentsEqual(currentAnnotation.content, content)
+    ) {
+      return;
+    }
+
+    const annotationCanonicalUrl = canonicalUrl;
+    const previousAnnotation = currentAnnotation;
+    const editedAnnotation: Annotation =
+      currentAnnotation.type === 'text'
+        ? {
+            ...currentAnnotation,
+            updatedAt: new Date().toISOString(),
+            content: content as typeof currentAnnotation.content,
+          }
+        : {
+            ...currentAnnotation,
+            updatedAt: new Date().toISOString(),
+            content: content as typeof currentAnnotation.content,
+          };
+
+    await commandHistory.execute({
+      execute: async () => {
+        const savedAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, editedAnnotation);
+        annotations = annotations.map((annotation) => (annotation.id === savedAnnotation.id ? savedAnnotation : annotation));
+        selectedAnnotationId = savedAnnotation.id;
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+      undo: async () => {
+        const restoredAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, previousAnnotation);
+        annotations = annotations.map((annotation) =>
+          annotation.id === restoredAnnotation.id ? restoredAnnotation : annotation,
+        );
+        selectedAnnotationId = restoredAnnotation.id;
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+      redo: async () => {
+        const savedAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, editedAnnotation);
+        annotations = annotations.map((annotation) => (annotation.id === savedAnnotation.id ? savedAnnotation : annotation));
+        selectedAnnotationId = savedAnnotation.id;
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+    });
+  };
+
   const overlayController = createOverlayController(document, window, {
     onCreateAnnotation: (content) =>
       handleCreateAnnotation(content).catch((error: unknown) => {
         console.error(`Marginalia failed to save annotation: ${describeError(error)}`);
+      }),
+    onEditAnnotation: (annotationId, content) =>
+      handleEditAnnotation(annotationId, content).catch((error: unknown) => {
+        console.error(`Marginalia failed to edit annotation: ${describeError(error)}`);
       }),
     onMoveAnnotation: (annotationId, bounds) =>
       handleMoveAnnotation(annotationId, bounds).catch((error: unknown) => {
