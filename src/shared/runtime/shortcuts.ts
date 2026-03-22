@@ -37,6 +37,7 @@ export type ShortcutBindings = Record<ShortcutAction, ShortcutBinding>;
 export type ShortcutDefinitions = Record<ShortcutAction, ShortcutDefinition>;
 
 export const SHORTCUT_STORAGE_KEY = 'marginalia.shortcuts';
+const MODIFIER_KEY_CODES = new Set(['AltLeft', 'AltRight', 'ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight', 'ShiftLeft', 'ShiftRight']);
 
 export const SHORTCUT_DEFINITIONS: ShortcutDefinitions = {
   toggleAnnotationMode: {
@@ -204,6 +205,68 @@ export const DEFAULT_SHORTCUT_BINDINGS: ShortcutBindings = createShortcutBinding
 const normalizeBindings = (bindings?: Partial<ShortcutBindings>): ShortcutBindings =>
   createShortcutBindings((action) => bindings?.[action] ?? DEFAULT_SHORTCUT_BINDINGS[action]);
 
+export const areShortcutBindingsEqual = (left: ShortcutBinding, right: ShortcutBinding): boolean =>
+  left.code === right.code &&
+  left.altKey === right.altKey &&
+  left.shiftKey === right.shiftKey &&
+  left.primaryModifier === right.primaryModifier;
+
+export const shouldIgnoreKeyboardEventTarget = (event: Pick<KeyboardEvent, 'target'>): boolean => {
+  const eventTarget = event.target;
+
+  if (!(eventTarget instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    eventTarget.isContentEditable ||
+    eventTarget instanceof HTMLInputElement ||
+    eventTarget instanceof HTMLSelectElement ||
+    eventTarget instanceof HTMLTextAreaElement
+  );
+};
+
+export const readShortcutBindingFromKeyboardEvent = (
+  event: Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'metaKey' | 'shiftKey'>,
+  platform = getPlatform(),
+): ShortcutBinding | null => {
+  if (!event.code || MODIFIER_KEY_CODES.has(event.code)) {
+    return null;
+  }
+
+  return normalizeBinding({
+    code: event.code,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    primaryModifier: isApplePlatform(platform) ? event.metaKey : event.ctrlKey,
+  });
+};
+
+export const validateShortcutBinding = (
+  bindings: ShortcutBindings,
+  action: ShortcutAction,
+  binding: ShortcutBinding,
+  platform = getPlatform(),
+): string | null => {
+  const normalizedBinding = normalizeBinding(binding);
+
+  if (!normalizedBinding.code || MODIFIER_KEY_CODES.has(normalizedBinding.code)) {
+    return 'Shortcut needs a non-modifier key.';
+  }
+
+  const conflictingAction =
+    SHORTCUT_ACTIONS.find(
+      (candidateAction) =>
+        candidateAction !== action && areShortcutBindingsEqual(bindings[candidateAction], normalizedBinding),
+    ) ?? null;
+
+  if (!conflictingAction) {
+    return null;
+  }
+
+  return `${SHORTCUT_DEFINITIONS[conflictingAction].label} already uses ${formatShortcut(normalizedBinding, platform)}.`;
+};
+
 const storageGet = async <T>(key: string): Promise<T | undefined> =>
   new Promise<T | undefined>((resolve, reject) => {
     chrome.storage.sync.get(key, (items) => {
@@ -245,7 +308,31 @@ export const ensureShortcutBindings = async (): Promise<ShortcutBindings> => {
   return nextBindings;
 };
 
+export const updateShortcutBinding = async (
+  action: ShortcutAction,
+  binding: ShortcutBinding,
+): Promise<ShortcutBindings> => {
+  const storedBindings = await storageGet<Partial<ShortcutBindings>>(SHORTCUT_STORAGE_KEY);
+  const nextBinding = normalizeBinding(binding);
+  const currentBindings = normalizeBindings(storedBindings);
+  const validationError = validateShortcutBinding(currentBindings, action, nextBinding);
+
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  const nextBindings = {
+    ...currentBindings,
+    [action]: nextBinding,
+  };
+
+  await storageSet({ [SHORTCUT_STORAGE_KEY]: nextBindings });
+
+  return nextBindings;
+};
+
 export const subscribeToShortcutBindings = (listener: (bindings: ShortcutBindings) => void): (() => void) => {
+  const storageChanged = chrome.storage.sync.onChanged;
   const handleChange = ((
     changes: Record<string, chrome.storage.StorageChange>,
     areaName?: string,
@@ -259,10 +346,10 @@ export const subscribeToShortcutBindings = (listener: (bindings: ShortcutBinding
     listener(normalizeBindings(storageChange.newValue as Partial<ShortcutBindings> | undefined));
   }) as unknown as Parameters<typeof chrome.storage.sync.onChanged.addListener>[0];
 
-  chrome.storage.sync.onChanged.addListener(handleChange);
+  storageChanged.addListener(handleChange);
 
   return () => {
-    chrome.storage.sync.onChanged.removeListener(handleChange);
+    storageChanged.removeListener(handleChange);
   };
 };
 

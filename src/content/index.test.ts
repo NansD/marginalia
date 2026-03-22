@@ -169,9 +169,78 @@ describe('content script object tools', () => {
     });
 
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'select' });
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${ellipseAnnotation!.id}"]`)!, {
+      button: 0,
+      clientX: 180,
+      clientY: 120,
+      pointerId: 6,
+    });
+    fireEvent.pointerMove(overlayElement!, { clientX: 220, clientY: 150, pointerId: 6 });
+
+    expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '160');
+    expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '120');
+
+    fireEvent.pointerUp(overlayElement!, { pointerId: 6 });
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const movedEllipseAnnotation = annotations.find((annotation) => annotation.id === ellipseAnnotation!.id);
+
+      expect(movedEllipseAnnotation).toMatchObject({
+        content: {
+          kind: 'ellipse',
+          x: 160,
+          y: 90,
+          width: 60,
+          height: 60,
+          color: 'green',
+        },
+      });
+    });
+
+    await dispatchRuntimeMessage({ kind: 'run-annotation-command', command: 'undo' });
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const restoredEllipseAnnotation = annotations.find((annotation) => annotation.id === ellipseAnnotation!.id);
+
+      expect(restoredEllipseAnnotation).toMatchObject({
+        content: {
+          kind: 'ellipse',
+          x: 120,
+          y: 60,
+          width: 60,
+          height: 60,
+          color: 'green',
+        },
+      });
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '120');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '90');
+    });
+
+    await dispatchRuntimeMessage({ kind: 'run-annotation-command', command: 'redo' });
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const movedEllipseAnnotation = annotations.find((annotation) => annotation.id === ellipseAnnotation!.id);
+
+      expect(movedEllipseAnnotation).toMatchObject({
+        content: {
+          kind: 'ellipse',
+          x: 160,
+          y: 90,
+          width: 60,
+          height: 60,
+          color: 'green',
+        },
+      });
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '160');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '120');
+    });
+
     fireEvent.pointerDown(
       document.querySelector(`[data-marginalia-annotation-kind="connector"]`)!,
-      { button: 0, pointerId: 6 },
+      { button: 0, pointerId: 7 },
     );
     fireEvent.click(
       Array.from(document.querySelectorAll<HTMLButtonElement>('#marginalia-overlay-toolbar button')).find(
@@ -188,15 +257,15 @@ describe('content script object tools', () => {
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'connector' });
     fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${ellipseAnnotation!.id}"]`)!, {
       button: 0,
-      clientX: 120,
-      clientY: 90,
-      pointerId: 7,
+      clientX: 220,
+      clientY: 120,
+      pointerId: 8,
     });
     fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${textAnnotation!.id}"]`)!, {
       button: 0,
       clientX: 48,
       clientY: 96,
-      pointerId: 8,
+      pointerId: 9,
     });
 
     await waitFor(async () => {
@@ -208,7 +277,7 @@ describe('content script object tools', () => {
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'select' });
     fireEvent.pointerDown(
       document.querySelector(`[data-marginalia-annotation-id="${textAnnotation!.id}"]`)!,
-      { button: 0, pointerId: 9 },
+      { button: 0, pointerId: 10 },
     );
     fireEvent.click(
       Array.from(document.querySelectorAll<HTMLButtonElement>('#marginalia-overlay-toolbar button')).find(

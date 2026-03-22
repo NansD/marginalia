@@ -71,6 +71,7 @@ export interface OverlayController {
 
 export interface OverlayControllerOptions {
   onCreateAnnotation?: (content: AnnotationContent) => Promise<void> | void;
+  onMoveAnnotation?: (annotationId: string, bounds: CanvasBounds) => Promise<void> | void;
   onRequestDisable?: () => Promise<void> | void;
   onRunCommand?: (command: AnnotationCommand) => Promise<void> | void;
   onSelectTool?: (tool: AnnotationTool) => Promise<void> | void;
@@ -114,6 +115,27 @@ const normalizeBounds = (startX: number, startY: number, currentX: number, curre
   y: Math.min(startY, currentY),
   width: Math.abs(currentX - startX),
   height: Math.abs(currentY - startY),
+});
+
+const toCanvasBounds = (bounds: CanvasBounds): CanvasBounds => ({
+  x: bounds.x,
+  y: bounds.y,
+  width: bounds.width,
+  height: bounds.height,
+});
+
+const areBoundsEqual = (left: CanvasBounds, right: CanvasBounds): boolean =>
+  left.x === right.x &&
+  left.y === right.y &&
+  left.width === right.width &&
+  left.height === right.height;
+
+const updateCanvasAnnotationBounds = <T extends CanvasAnnotation>(annotation: T, bounds: CanvasBounds): T => ({
+  ...annotation,
+  content: {
+    ...annotation.content,
+    ...bounds,
+  },
 });
 
 const createTextAnnotationContent = (point: { x: number; y: number }): AnnotationContent => ({
@@ -416,6 +438,11 @@ export const createOverlayController = (
   let connectorSourceAnnotationId: string | null = null;
   let connectorSourceAnchor: ConnectorAnchor | null = null;
   let connectorPreviewPoint: { x: number; y: number } | null = null;
+  let dragPointerId: number | null = null;
+  let dragAnnotationId: string | null = null;
+  let dragStartPoint: { x: number; y: number } | null = null;
+  let dragOriginBounds: CanvasBounds | null = null;
+  let dragCurrentBounds: CanvasBounds | null = null;
 
   const getShouldRenderOverlay = (): boolean => interactive || annotations.length > 0 || draftStartPoint !== null;
 
@@ -439,6 +466,8 @@ export const createOverlayController = (
 
   const getPendingConnectorSourceAnnotation = (): CanvasAnnotation | undefined =>
     getCanvasAnnotationById(connectorSourceAnnotationId);
+
+  const getDraggedAnnotation = (): CanvasAnnotation | undefined => getCanvasAnnotationById(dragAnnotationId);
 
   const clearDraftShape = (): boolean => {
     const hadDraft =
@@ -467,6 +496,23 @@ export const createOverlayController = (
     connectorPreviewPoint = null;
 
     return hadConnectorDraft;
+  };
+
+  const clearDraggedAnnotation = (): boolean => {
+    const hadDraggedAnnotation =
+      dragPointerId !== null ||
+      dragAnnotationId !== null ||
+      dragStartPoint !== null ||
+      dragOriginBounds !== null ||
+      dragCurrentBounds !== null;
+
+    dragPointerId = null;
+    dragAnnotationId = null;
+    dragStartPoint = null;
+    dragOriginBounds = null;
+    dragCurrentBounds = null;
+
+    return hadDraggedAnnotation;
   };
 
   const setSelection = (annotationId: string | null, notify = false): boolean => {
@@ -703,15 +749,27 @@ export const createOverlayController = (
       return;
     }
 
+    const draggedBounds = dragCurrentBounds;
+    let renderedAnnotations = annotations;
+
+    if (dragAnnotationId && draggedBounds) {
+      renderedAnnotations = annotations.map((annotation) => {
+        if (annotation.id !== dragAnnotationId || !isCanvasAnnotation(annotation)) {
+          return annotation;
+        }
+
+        return updateCanvasAnnotationBounds(annotation, draggedBounds);
+      });
+    }
     const canvasAnnotationsById = new Map(
-      annotations
+      renderedAnnotations
         .filter(isCanvasAnnotation)
         .map((annotation) => [annotation.id, annotation] as const),
     );
     const connectorElements: SVGElement[] = [];
     const annotationElements: SVGElement[] = [];
 
-    for (const annotation of annotations) {
+    for (const annotation of renderedAnnotations) {
       const element = createAnnotationElement(
         documentRef,
         annotation,
@@ -899,7 +957,19 @@ export const createOverlayController = (
 
     if (activeTool === 'select') {
       event.preventDefault();
+      const selectedCanvasAnnotation = getCanvasAnnotationById(annotationId);
       const selectionChanged = setSelection(annotationId, true);
+
+      clearDraggedAnnotation();
+
+      if (selectedCanvasAnnotation) {
+        dragPointerId = event.pointerId;
+        dragAnnotationId = selectedCanvasAnnotation.id;
+        dragStartPoint = toPagePoint(event);
+        dragOriginBounds = toCanvasBounds(selectedCanvasAnnotation.content);
+        dragCurrentBounds = toCanvasBounds(selectedCanvasAnnotation.content);
+        overlayElement?.setPointerCapture?.(event.pointerId);
+      }
 
       if (selectionChanged || annotationId === null) {
         syncToDocument();
@@ -981,6 +1051,25 @@ export const createOverlayController = (
   }
 
   function handlePointerMove(event: PointerEvent): void {
+    if (
+      interactive &&
+      activeTool === 'select' &&
+      dragPointerId === event.pointerId &&
+      dragAnnotationId &&
+      dragStartPoint &&
+      dragOriginBounds
+    ) {
+      const point = toPagePoint(event);
+      dragCurrentBounds = {
+        ...dragOriginBounds,
+        x: dragOriginBounds.x + (point.x - dragStartPoint.x),
+        y: dragOriginBounds.y + (point.y - dragStartPoint.y),
+      };
+      syncToDocument();
+
+      return;
+    }
+
     if (interactive && activeTool === 'connector' && connectorSourceAnnotationId) {
       connectorPreviewPoint = toPagePoint(event);
       syncToDocument();
@@ -997,6 +1086,31 @@ export const createOverlayController = (
   }
 
   function handlePointerUp(event: PointerEvent): void {
+    if (
+      dragPointerId === event.pointerId &&
+      dragAnnotationId &&
+      dragOriginBounds &&
+      dragCurrentBounds &&
+      getDraggedAnnotation()
+    ) {
+      const dragCompletedBounds = { ...dragCurrentBounds };
+      const dragShouldPersist = !areBoundsEqual(dragOriginBounds, dragCompletedBounds);
+
+      if (!dragShouldPersist) {
+        clearDraggedAnnotation();
+        syncToDocument();
+
+        return;
+      }
+
+      void Promise.resolve(controllerOptions.onMoveAnnotation?.(dragAnnotationId, dragCompletedBounds)).finally(() => {
+        clearDraggedAnnotation();
+        syncToDocument();
+      });
+
+      return;
+    }
+
     if (draftPointerId !== event.pointerId) {
       return;
     }
@@ -1005,6 +1119,13 @@ export const createOverlayController = (
   }
 
   function handlePointerCancel(event: PointerEvent): void {
+    if (dragPointerId === event.pointerId) {
+      clearDraggedAnnotation();
+      syncToDocument();
+
+      return;
+    }
+
     if (draftPointerId !== event.pointerId) {
       return;
     }
@@ -1044,6 +1165,7 @@ export const createOverlayController = (
 
     cancelled = clearDraftShape() || cancelled;
     cancelled = clearConnectorDraft() || cancelled;
+    cancelled = clearDraggedAnnotation() || cancelled;
     cancelled = setSelection(null, true) || cancelled;
 
     if (cancelled) {
@@ -1060,6 +1182,7 @@ export const createOverlayController = (
       if (!enabled) {
         clearDraftShape();
         clearConnectorDraft();
+        clearDraggedAnnotation();
       }
 
       syncToDocument();
@@ -1075,6 +1198,10 @@ export const createOverlayController = (
         clearConnectorDraft();
       }
 
+      if (!getDraggedAnnotation()) {
+        clearDraggedAnnotation();
+      }
+
       syncToDocument();
     },
     setActiveTool(tool) {
@@ -1086,6 +1213,7 @@ export const createOverlayController = (
 
       clearDraftShape();
       clearConnectorDraft();
+      clearDraggedAnnotation();
 
       if (tool !== 'select') {
         setSelection(null, true);

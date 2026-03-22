@@ -8,7 +8,10 @@ import {
   findMatchingShortcutAction,
   formatShortcut,
   getShortcutRuntimeMessage,
+  readShortcutBindingFromKeyboardEvent,
   SHORTCUT_DEFINITIONS,
+  updateShortcutBinding,
+  validateShortcutBinding,
 } from '@/shared/runtime/shortcuts';
 
 describe('shortcut bindings', () => {
@@ -79,5 +82,81 @@ describe('shortcut bindings', () => {
     for (const action of Object.keys(SHORTCUT_DEFINITIONS) as Array<keyof typeof SHORTCUT_DEFINITIONS>) {
       expect(isRuntimeMessage(getShortcutRuntimeMessage(action))).toBe(true);
     }
+  });
+
+  it('reads shortcut bindings from keyboard events', () => {
+    const event = new KeyboardEvent('keydown', {
+      code: 'KeyK',
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+    });
+
+    expect(readShortcutBindingFromKeyboardEvent(event, 'Win32')).toEqual({
+      code: 'KeyK',
+      altKey: true,
+      shiftKey: true,
+      primaryModifier: true,
+    });
+  });
+
+  it('ignores modifier-only keyboard events while recording', () => {
+    const event = new KeyboardEvent('keydown', {
+      code: 'ShiftLeft',
+      shiftKey: true,
+    });
+
+    expect(readShortcutBindingFromKeyboardEvent(event, 'Win32')).toBeNull();
+  });
+
+  it('rejects duplicate shortcut bindings', () => {
+    expect(
+      validateShortcutBinding(DEFAULT_SHORTCUT_BINDINGS, 'textTool', {
+        code: 'KeyV',
+        altKey: false,
+        shiftKey: false,
+        primaryModifier: false,
+      }),
+    ).toBe('Select tool already uses V.');
+  });
+
+  it('persists an updated shortcut binding to synced storage', async () => {
+    const storageState: Record<string, unknown> = {};
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        lastError: undefined,
+      },
+      storage: {
+        sync: {
+          get: vi.fn((key: string, callback: (items: Record<string, unknown>) => void) => {
+            callback({ [key]: storageState[key] });
+          }),
+          set: vi.fn((items: Record<string, unknown>, callback: () => void) => {
+            Object.assign(storageState, items);
+            callback();
+          }),
+          onChanged: {
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+          },
+        },
+      },
+    });
+
+    const nextBindings = await updateShortcutBinding('selectTool', {
+      code: 'KeyS',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: true,
+    });
+
+    expect(nextBindings.selectTool).toEqual({
+      code: 'KeyS',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: true,
+    });
+    expect(storageState['marginalia.shortcuts']).toEqual(nextBindings);
   });
 });

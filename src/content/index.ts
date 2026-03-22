@@ -1,4 +1,10 @@
-import type { Annotation, AnnotationContent } from '@/shared/models/annotations';
+import {
+  isCanvasAnnotation,
+  type Annotation,
+  type AnnotationContent,
+  type CanvasAnnotation,
+  type CanvasBounds,
+} from '@/shared/models/annotations';
 import { LocalAdapter } from '@/shared/storage/LocalAdapter';
 import {
   type AnnotationCommand,
@@ -11,6 +17,7 @@ import {
   DEFAULT_SHORTCUT_BINDINGS,
   ensureShortcutBindings,
   findMatchingShortcutAction,
+  shouldIgnoreKeyboardEventTarget,
   SHORTCUT_DEFINITIONS,
   subscribeToShortcutBindings,
 } from '@/shared/runtime/shortcuts';
@@ -21,21 +28,6 @@ import { observePageNavigation } from './navigationObserver';
 import { createOverlayController } from './overlayController';
 
 const adapter = new LocalAdapter();
-
-const shouldIgnoreKeyboardEvent = (event: KeyboardEvent): boolean => {
-  const eventTarget = event.target;
-
-  if (!(eventTarget instanceof HTMLElement)) {
-    return false;
-  }
-
-  return (
-    eventTarget.isContentEditable ||
-    eventTarget instanceof HTMLInputElement ||
-    eventTarget instanceof HTMLSelectElement ||
-    eventTarget instanceof HTMLTextAreaElement
-  );
-};
 
 const sendRuntimeMessage = async (message: RuntimeMessage): Promise<void> =>
   new Promise<void>((resolve) => {
@@ -119,6 +111,19 @@ const canCreateConnector = (currentAnnotations: Annotation[], content: Annotatio
 
   return canvasAnnotationIds.has(content.sourceId) && canvasAnnotationIds.has(content.targetId);
 };
+
+const updateAnnotationBounds = <T extends CanvasAnnotation>(
+  annotation: T,
+  bounds: CanvasBounds,
+  timestamp: string,
+): T => ({
+  ...annotation,
+  updatedAt: timestamp,
+  content: {
+    ...annotation.content,
+    ...bounds,
+  },
+}) as T;
 
 const bootstrapContentScript = async (): Promise<void> => {
   let annotationModeEnabled = false;
@@ -271,10 +276,52 @@ const bootstrapContentScript = async (): Promise<void> => {
     });
   };
 
+  const handleMoveAnnotation = async (annotationId: string, bounds: CanvasBounds): Promise<void> => {
+    const currentAnnotation = annotations.find((annotation) => annotation.id === annotationId);
+
+    if (!currentAnnotation || !isCanvasAnnotation(currentAnnotation)) {
+      return;
+    }
+
+    if (
+      currentAnnotation.content.x === bounds.x &&
+      currentAnnotation.content.y === bounds.y &&
+      currentAnnotation.content.width === bounds.width &&
+      currentAnnotation.content.height === bounds.height
+    ) {
+      return;
+    }
+
+    const annotationCanonicalUrl = canonicalUrl;
+    const previousAnnotation = currentAnnotation;
+    const movedAnnotation = updateAnnotationBounds(currentAnnotation, bounds, new Date().toISOString());
+
+    await commandHistory.execute({
+      execute: async () => {
+        const savedAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, movedAnnotation);
+        annotations = annotations.map((annotation) => (annotation.id === savedAnnotation.id ? savedAnnotation : annotation));
+        selectedAnnotationId = savedAnnotation.id;
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+      undo: async () => {
+        const restoredAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, previousAnnotation);
+        annotations = annotations.map((annotation) =>
+          annotation.id === restoredAnnotation.id ? restoredAnnotation : annotation,
+        );
+        selectedAnnotationId = restoredAnnotation.id;
+        await persistAnnotationsChanged(annotationCanonicalUrl);
+      },
+    });
+  };
+
   const overlayController = createOverlayController(document, window, {
     onCreateAnnotation: (content) =>
       handleCreateAnnotation(content).catch((error: unknown) => {
         console.error(`Marginalia failed to save annotation: ${describeError(error)}`);
+      }),
+    onMoveAnnotation: (annotationId, bounds) =>
+      handleMoveAnnotation(annotationId, bounds).catch((error: unknown) => {
+        console.error(`Marginalia failed to move annotation: ${describeError(error)}`);
       }),
     onRequestDisable: async () => {
       await setAnnotationMode(false);
@@ -318,7 +365,7 @@ const bootstrapContentScript = async (): Promise<void> => {
   document.addEventListener(
     'keydown',
     (event) => {
-      if (shouldIgnoreKeyboardEvent(event)) {
+      if (shouldIgnoreKeyboardEventTarget(event)) {
         return;
       }
 

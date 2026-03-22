@@ -352,6 +352,58 @@ describe('createOverlayController', () => {
     expect(onRunCommand).toHaveBeenCalledWith('delete-selected-annotation');
   });
 
+  it('drags selected canvas annotations in select mode and keeps connectors aligned', () => {
+    const onMoveAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onMoveAnnotation });
+
+    controller.setAnnotations([
+      buildRectangleAnnotation('annotation-source'),
+      buildTextAnnotation('annotation-target', {
+        content: {
+          x: 260,
+          y: 64,
+        },
+      }),
+      buildConnectorAnnotation('annotation-connector', {
+        content: {
+          sourceId: 'annotation-source',
+          targetId: 'annotation-target',
+        },
+      }),
+    ]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const overlayElement = getOverlayElement();
+    const connectorElement = overlayElement.querySelector<SVGLineElement>(
+      '[data-marginalia-annotation-id="annotation-connector"]',
+    );
+    const sourceElement = overlayElement.querySelector('[data-marginalia-annotation-id="annotation-source"]');
+
+    expect(connectorElement).toHaveAttribute('x1', '176');
+    expect(connectorElement).toHaveAttribute('y1', '60');
+    expect(sourceElement).toBeInTheDocument();
+
+    fireEvent.pointerDown(sourceElement!, { button: 0, clientX: 80, clientY: 56, pointerId: 14 });
+    fireEvent.pointerMove(overlayElement, { clientX: 120, clientY: 76, pointerId: 14 });
+
+    expect(
+      overlayElement.querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
+    ).toHaveAttribute('x1', '216');
+    expect(
+      overlayElement.querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
+    ).toHaveAttribute('y1', '80');
+
+    fireEvent.pointerUp(overlayElement, { pointerId: 14 });
+
+    expect(onMoveAnnotation).toHaveBeenCalledWith('annotation-source', {
+      x: 56,
+      y: 44,
+      width: 160,
+      height: 72,
+    });
+  });
+
   it('queues document sync through requestAnimationFrame on scroll and resize', () => {
     const callbacks: FrameRequestCallback[] = [];
 
