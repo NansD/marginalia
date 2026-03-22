@@ -68,13 +68,13 @@ npm ci
 
 ## Development Commands
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start Vite in development mode for extension work. |
-| `npm run lint` | Run ESLint across the TypeScript/React codebase. |
+| Command             | Purpose                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| `npm run dev`       | Start Vite in development mode for extension work.         |
+| `npm run lint`      | Run ESLint across the TypeScript/React codebase.           |
 | `npm run typecheck` | Run the TypeScript project references build in check mode. |
-| `npm run test` | Run the Vitest suite once. |
-| `npm run build` | Build the extension bundle into `dist/`. |
+| `npm run test`      | Run the Vitest suite once.                                 |
+| `npm run build`     | Build the extension bundle into `dist/`.                   |
 
 A good local verification pass before opening a pull request is:
 
@@ -88,6 +88,12 @@ Build the extension first:
 
 ```bash
 npm run build
+```
+
+For Firefox, build with the Firefox-specific manifest patch:
+
+```bash
+npm run build:firefox
 ```
 
 ### Chrome / Chromium
@@ -110,7 +116,8 @@ npm run build
 Notes:
 
 - Firefox temporary add-ons are removed when the browser restarts.
-- Re-run `npm run build` whenever source changes need to be reflected in `dist/`.
+- Re-run `npm run build:firefox` whenever source changes need to be reflected in `dist/` for Firefox.
+- The CRX plugin build output is Chromium-first; `build:firefox` patches `dist/manifest.json` to include `background.scripts` as a Firefox fallback.
 
 ## Architecture Summary
 
