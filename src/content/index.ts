@@ -8,7 +8,7 @@ import {
 import {
   DEFAULT_SHORTCUT_BINDINGS,
   ensureShortcutBindings,
-  matchesShortcut,
+  findMatchingShortcutAction,
   subscribeToShortcutBindings,
 } from '@/shared/runtime/shortcuts';
 import { canonicalizeUrl } from '@/shared/url/canonicalizeUrl';
@@ -122,7 +122,9 @@ const bootstrapContentScript = async (): Promise<void> => {
         return;
       }
 
-      if (!matchesShortcut(shortcutBindings.toggleAnnotationMode, event)) {
+      const matchedAction = findMatchingShortcutAction(shortcutBindings, event);
+
+      if (matchedAction !== 'toggleAnnotationMode') {
         return;
       }
 

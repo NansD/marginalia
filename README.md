@@ -14,19 +14,19 @@ This project is aimed at a web annotation workspace with:
 - content-script and background entry points for extension runtime behavior
 - a local-first architecture that can later grow into optional sync
 
-Today, the repository contains the Phase 0 foundations and an initial Phase 1 runtime slice: extension scaffolding, shared UI scaffolding, automated lint/typecheck/test/build scripts, CI workflows, URL canonicalization, local storage plumbing, badge updates, and annotation-mode toggling.
+Today, the repository contains the Phase 0 foundations and an initial slice toward the v1 local MVP: extension scaffolding, shared UI scaffolding, automated lint/typecheck/test/build scripts, CI workflows, URL canonicalization, local storage plumbing, badge updates, annotation-mode toggling, and a first persisted rectangle path.
 
 ## Feature Scope
 
-The planned product scope is described in [`plans/plan-marginalia.md`](plans/plan-marginalia.md) and currently covers:
+The detailed implementation phases live in [`plans/plan-marginalia.md`](plans/plan-marginalia.md), but the PRD publication roadmap rolls them up into broader milestones:
 
-- Phase 0: repository foundations, documentation, and CI
-- Phase 1: extension skeleton, local storage, URL normalization, and mode toggling
-- Phase 2+: annotation tools, highlights, dashboard workflows, sync, and export features
+- **v1 local MVP (extension only):** sticky notes, text boxes, rectangles, ellipses, straight connectors, keyboard-first tool switching, undo/redo, local storage, URL normalization, and badge updates
+- **v2:** highlights, freehand drawing, dashboard/library workflows, and shortcut/help polish
+- **Later releases:** sync, monetization, export, and integrations
 
 ## Current Status
 
-### Implemented in this slice
+### Implemented on this branch
 
 - Phase 0 repository foundations are in place:
   - project documentation and contribution guidance
@@ -34,9 +34,10 @@ The planned product scope is described in [`plans/plan-marginalia.md`](plans/pla
   - React entry points for `popup`, `options`, and `dashboard`
   - MV3 manifest plus background/content script entry files
   - lint, typecheck, test, and build scripts wired through npm
-- A Phase 1 runtime slice is in place:
+- An initial runtime slice toward the v1 local MVP is in place:
   - the toolbar button and keyboard shortcut toggle annotation mode on the active page
   - the content script mounts a full-document SVG overlay that becomes inert when mode is off
+  - rectangle annotations can already be drawn, saved locally, and rendered back onto the page
   - IndexedDB-backed local storage and canonical URL normalization are implemented
   - the background service worker tracks per-tab canonical URLs and badge counts
 - Build output is generated in `dist/` and currently includes:
@@ -46,10 +47,17 @@ The planned product scope is described in [`plans/plan-marginalia.md`](plans/pla
   - `dashboard.html`
   - compiled assets under `dist/assets/`
 
-### Planned next phases
+### Remaining before the v1 local MVP
 
-- Phase 2 will add canvas interactions, selection, undo/redo, and persistent rendering of annotation objects.
-- Later phases will add richer annotation tools, dashboard data workflows, sync, and export/integration features.
+- keyboard-first tool switching beyond the mode-toggle shortcut
+- selection/editing interactions and undo/redo
+- sticky notes, text boxes, ellipses, and straight connectors
+- finishing the full extension-only diagramming workflow described in the PRD
+
+### Planned after v1
+
+- v2 adds highlights, freehand drawing, and the dashboard/library workflows.
+- Later releases add sync, export, and integrations.
 
 If you are looking for the detailed roadmap, start with [`plans/plan-marginalia.md`](plans/plan-marginalia.md).
 

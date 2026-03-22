@@ -1,4 +1,9 @@
-import type { Annotation, RectangleAnnotationContent } from '@/shared/models/annotations';
+import {
+  isRectangleAnnotation,
+  type Annotation,
+  type RectangleAnnotation,
+  type RectangleAnnotationContent,
+} from '@/shared/models/annotations';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -41,7 +46,7 @@ const getDocumentDimensions = (documentRef: Document) => {
   };
 };
 
-const createRectangleElement = (documentRef: Document, annotation: Annotation): SVGRectElement => {
+const createRectangleElement = (documentRef: Document, annotation: RectangleAnnotation): SVGRectElement => {
   const rectangle = documentRef.createElementNS(SVG_NAMESPACE, 'rect');
 
   rectangle.dataset.marginaliaAnnotationId = annotation.id;
@@ -192,7 +197,9 @@ export const createOverlayController = (
       return;
     }
 
-    annotationsLayer.replaceChildren(...annotations.map((annotation) => createRectangleElement(documentRef, annotation)));
+    annotationsLayer.replaceChildren(
+      ...annotations.filter(isRectangleAnnotation).map((annotation) => createRectangleElement(documentRef, annotation)),
+    );
   };
 
   const syncToDocument = (): void => {

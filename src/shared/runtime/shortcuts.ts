@@ -1,4 +1,20 @@
-export type ShortcutAction = 'toggleAnnotationMode';
+import type { RuntimeMessage } from '@/shared/runtime/messages';
+
+export const SHORTCUT_ACTIONS = [
+  'toggleAnnotationMode',
+  'selectTool',
+  'textTool',
+  'stickyNoteTool',
+  'rectangleTool',
+  'ellipseTool',
+  'connectorTool',
+  'cancelCurrentAction',
+  'undo',
+  'redo',
+] as const;
+
+export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number];
+export type ShortcutSection = 'General' | 'Tools' | 'Editing';
 
 export interface ShortcutBinding {
   code: string;
@@ -7,16 +23,141 @@ export interface ShortcutBinding {
   primaryModifier: boolean;
 }
 
+export interface ShortcutDefinition {
+  label: string;
+  description: string;
+  section: ShortcutSection;
+  defaultBinding: ShortcutBinding;
+  runtimeMessage: RuntimeMessage;
+  commandName?: string;
+}
+
 export type ShortcutBindings = Record<ShortcutAction, ShortcutBinding>;
+export type ShortcutDefinitions = Record<ShortcutAction, ShortcutDefinition>;
 
 export const SHORTCUT_STORAGE_KEY = 'marginalia.shortcuts';
 
-export const DEFAULT_SHORTCUT_BINDINGS: ShortcutBindings = {
+export const SHORTCUT_DEFINITIONS: ShortcutDefinitions = {
   toggleAnnotationMode: {
-    code: 'KeyY',
-    altKey: false,
-    shiftKey: true,
-    primaryModifier: true,
+    label: 'Toggle annotation mode',
+    description: 'Enable or disable the overlay on the active page.',
+    section: 'General',
+    defaultBinding: {
+      code: 'KeyY',
+      altKey: false,
+      shiftKey: true,
+      primaryModifier: true,
+    },
+    runtimeMessage: { kind: 'toggle-annotation-mode' },
+    commandName: 'toggle-annotation-mode',
+  },
+  selectTool: {
+    label: 'Select tool',
+    description: 'Activate the select and move tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyV',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'select' },
+  },
+  textTool: {
+    label: 'Text tool',
+    description: 'Activate the free-floating text tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyT',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'text' },
+  },
+  stickyNoteTool: {
+    label: 'Sticky note tool',
+    description: 'Activate the sticky note placement tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyN',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'sticky-note' },
+  },
+  rectangleTool: {
+    label: 'Rectangle tool',
+    description: 'Activate the rectangle drawing tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyR',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'rectangle' },
+  },
+  ellipseTool: {
+    label: 'Ellipse tool',
+    description: 'Activate the ellipse drawing tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyO',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'ellipse' },
+  },
+  connectorTool: {
+    label: 'Connector tool',
+    description: 'Activate the connector drawing tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyC',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'connector' },
+  },
+  cancelCurrentAction: {
+    label: 'Cancel or deselect',
+    description: 'Exit the current interaction or clear selection.',
+    section: 'Editing',
+    defaultBinding: {
+      code: 'Escape',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'run-annotation-command', command: 'cancel-current-action' },
+  },
+  undo: {
+    label: 'Undo',
+    description: 'Revert the most recent annotation change.',
+    section: 'Editing',
+    defaultBinding: {
+      code: 'KeyZ',
+      altKey: false,
+      shiftKey: false,
+      primaryModifier: true,
+    },
+    runtimeMessage: { kind: 'run-annotation-command', command: 'undo' },
+  },
+  redo: {
+    label: 'Redo',
+    description: 'Reapply the most recently undone annotation change.',
+    section: 'Editing',
+    defaultBinding: {
+      code: 'KeyZ',
+      altKey: false,
+      shiftKey: true,
+      primaryModifier: true,
+    },
+    runtimeMessage: { kind: 'run-annotation-command', command: 'redo' },
   },
 };
 
@@ -36,9 +177,19 @@ const normalizeBinding = (binding: ShortcutBinding): ShortcutBinding => ({
   primaryModifier: binding.primaryModifier,
 });
 
-const normalizeBindings = (bindings?: Partial<ShortcutBindings>): ShortcutBindings => ({
-  toggleAnnotationMode: normalizeBinding(bindings?.toggleAnnotationMode ?? DEFAULT_SHORTCUT_BINDINGS.toggleAnnotationMode),
-});
+const createShortcutBindings = (resolveBinding: (action: ShortcutAction) => ShortcutBinding): ShortcutBindings =>
+  SHORTCUT_ACTIONS.reduce<ShortcutBindings>((bindings, action) => {
+    bindings[action] = normalizeBinding(resolveBinding(action));
+
+    return bindings;
+  }, {} as ShortcutBindings);
+
+export const DEFAULT_SHORTCUT_BINDINGS: ShortcutBindings = createShortcutBindings(
+  (action) => SHORTCUT_DEFINITIONS[action].defaultBinding,
+);
+
+const normalizeBindings = (bindings?: Partial<ShortcutBindings>): ShortcutBindings =>
+  createShortcutBindings((action) => bindings?.[action] ?? DEFAULT_SHORTCUT_BINDINGS[action]);
 
 const storageGet = async <T>(key: string): Promise<T | undefined> =>
   new Promise<T | undefined>((resolve, reject) => {
@@ -117,6 +268,19 @@ export const matchesShortcut = (
     event.metaKey === expectsMeta &&
     event.ctrlKey === expectsCtrl
   );
+};
+
+export const findMatchingShortcutAction = (
+  bindings: ShortcutBindings,
+  event: Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'metaKey' | 'shiftKey'>,
+  platform = getPlatform(),
+): ShortcutAction | null =>
+  SHORTCUT_ACTIONS.find((action) => matchesShortcut(bindings[action], event, platform)) ?? null;
+
+export const getShortcutRuntimeMessage = (action: ShortcutAction): RuntimeMessage => {
+  const runtimeMessage = SHORTCUT_DEFINITIONS[action].runtimeMessage;
+
+  return { ...runtimeMessage };
 };
 
 export const formatShortcut = (binding: ShortcutBinding, platform = getPlatform()): string => {

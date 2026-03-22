@@ -26,6 +26,18 @@ Durable decisions that apply across all phases:
 
 ---
 
+## Roadmap framing
+
+This implementation plan breaks the PRD publication milestones into smaller delivery phases:
+
+- **v1 local MVP** in the PRD maps to **Phases 1-4** below: extension-only, local-first annotation workflows with structured objects and connectors. It excludes highlights, freehand, dashboard workflows, sync, and export.
+- **v2** in the PRD maps to **Phases 5-8** below: shortcut/help polish plus highlights, freehand, and the dashboard/library experience.
+- **Later releases** map to **Phases 9-10** below: sync, monetization, export, and integrations.
+
+Current branch status: Phase 0 foundations are in place, and the checked-out code is partway into the v1 track with annotation-mode toggling, local storage, URL normalization, badge updates, and an initial persisted rectangle slice. The remaining v1 scope is still planned work.
+
+---
+
 ## Phase 0: Repository Foundations (README + GitHub Actions)
 
 **User stories**: US52 (new contributor can set up locally in under 10 minutes), US53 (all pull requests run automated checks), US54 (main branch protected by passing checks)
@@ -47,13 +59,13 @@ Create a production-ready `README.md` and baseline CI workflows so the project i
 
 ---
 
-## Phase 1: Extension Skeleton + Storage + URL Normalization
+## Phase 1 (v1 track): Extension Skeleton + Storage + URL Normalization
 
 **User stories**: US1 (toolbar toggle), US2 (keyboard shortcut toggle), US25 (badge indicator), US26 (annotations don't block browsing when off), US28–31 (URL normalization + SPA routing), US32 (auto-save), US33 (local-only, no account)
 
 ### What to build
 
-A fully wired but visually empty extension: manifest, content script, and toolbar button that toggles annotation mode on/off. The SVG overlay mounts when annotation mode activates and becomes `pointer-events: none` when it deactivates. The Keyboard Manager is initialized with default bindings stored in `browser.storage.sync` — the mode-toggle shortcut works end-to-end. The URL Normalizer derives a canonical key on every page load and SPA navigation event. `LocalAdapter` (IndexedDB) implements the full `StorageAdapter` interface. The Badge Manager reads annotation count and updates the extension icon badge. No annotation tools exist yet — this phase is purely the skeleton.
+A fully wired extension skeleton: manifest, content script, and toolbar button that toggles annotation mode on/off. The SVG overlay mounts when annotation mode activates and becomes `pointer-events: none` when it deactivates. The Keyboard Manager is initialized with default bindings stored in `browser.storage.sync` — the mode-toggle shortcut works end-to-end. The URL Normalizer derives a canonical key on every page load and SPA navigation event. `LocalAdapter` (IndexedDB) implements the full `StorageAdapter` interface. The Badge Manager reads annotation count and updates the extension icon badge. This phase is primarily the runtime/storage skeleton that the rest of v1 builds on.
 
 ### Acceptance criteria
 
@@ -68,7 +80,7 @@ A fully wired but visually empty extension: manifest, content script, and toolba
 
 ---
 
-## Phase 2: SVG Canvas + Select Tool + Undo/Redo
+## Phase 2 (v1 track): SVG Canvas + Select Tool + Undo/Redo
 
 **User stories**: US3 (Figma-style tool palette), US4 (single-key tool switching), US5 (scroll page while in annotation mode), US6 (undo/redo), US23 (annotations visible outside annotation mode), US24 (hide/show all toggle), US27 (full pointer-lock in annotation mode, scroll passes through)
 
@@ -89,7 +101,7 @@ The SVG canvas layer renders over the page and supports placing, selecting, movi
 
 ---
 
-## Phase 3: Sticky Notes + Text Boxes + Shapes
+## Phase 3 (v1 track): Sticky Notes + Text Boxes + Shapes
 
 **User stories**: US7 (place sticky by double-click), US8 (Markdown shortcuts in sticky notes), US9 (resize/drag sticky notes), US10 (sticky note color options), US11 (collapse sticky to title), US19 (rectangles and ellipses), US20 (free-floating text boxes)
 
@@ -120,7 +132,7 @@ All three types auto-save on every mutation and render correctly on page reload.
 
 ---
 
-## Phase 4: Connectors + Grouping
+## Phase 4 (v1 track): Connectors + Grouping
 
 **User stories**: US21 (straight arrows connecting shapes, endpoints track when shapes move), US22 (group/ungroup annotation objects)
 
@@ -143,7 +155,7 @@ All three types auto-save on every mutation and render correctly on page reload.
 
 ---
 
-## Phase 5: Keyboard Shortcuts Settings + Help Overlay
+## Phase 5 (v2 track): Keyboard Shortcuts Settings + Help Overlay
 
 **User stories**: US45 (`?` help overlay showing all shortcuts), US46 (remap any shortcut from extension settings page), US47 (keyboard navigation for all UI panels)
 
@@ -162,7 +174,7 @@ The `?` key opens a help overlay rendering the live shortcut map from the Keyboa
 
 ---
 
-## Phase 6: Text Highlights
+## Phase 6 (v2 track): Text Highlights
 
 **User stories**: US12 (color highlight selected text), US13 (attach comment to highlight), US14 (multiple highlight colors), US15 (highlights resilient to minor DOM changes)
 
@@ -182,7 +194,7 @@ The Highlight tool (`H`) serializes a text selection as an offset-based DOM anch
 
 ---
 
-## Phase 7: Freehand Drawing
+## Phase 7 (v2 track): Freehand Drawing
 
 **User stories**: US16 (freehand lines/shapes on canvas), US17 (pen color, stroke width, opacity), US18 (selective eraser)
 
@@ -200,7 +212,7 @@ The Draw tool (`P`) captures pointer events as freehand strokes rendered on a `<
 
 ---
 
-## Phase 8: Dashboard (Extension Page)
+## Phase 8 (v2 track): Dashboard (Extension Page)
 
 **User stories**: US36 (JSON export), US37 (URL library listing all annotated pages), US38 (search by URL/title/content), US39 (sort by last edited/created/count/domain), US40 (filter by tag/domain/type), US41 (annotation preview per URL), US42 (open annotated URL from dashboard), US43 (delete annotations for a URL), US44 (tag annotated pages)
 
