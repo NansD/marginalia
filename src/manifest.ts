@@ -5,10 +5,11 @@ export default defineManifest({
   name: "Marginalia",
   version: "0.1.0",
   description: "Local-first web annotation workspace for the browser.",
-  permissions: ["activeTab", "storage", "tabs"],
+  permissions: ["activeTab", "scripting", "storage", "tabs"],
   host_permissions: ["http://*/*", "https://*/*"],
   action: {
     default_title: "Marginalia",
+    default_popup: "popup.html",
   },
   background: {
     service_worker: "src/background/index.ts",

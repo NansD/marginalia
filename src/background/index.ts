@@ -1,26 +1,12 @@
 import { LocalAdapter } from '@/shared/storage/LocalAdapter';
 import { ensureShortcutBindings } from '@/shared/runtime/shortcuts';
-import { isRuntimeMessage, type RuntimeMessage } from '@/shared/runtime/messages';
+import { isRuntimeMessage } from '@/shared/runtime/messages';
+import { sendMessageToTab } from '@/shared/runtime/tabMessaging';
 
 const adapter = new LocalAdapter();
 const tabCanonicalUrls = new Map<number, string>();
 
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-const sendMessageToTab = async (tabId: number, message: RuntimeMessage): Promise<unknown> =>
-  new Promise<unknown>((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      const error = chrome.runtime.lastError;
-
-      if (error) {
-        reject(new Error(error.message));
-
-        return;
-      }
-
-      resolve(response);
-    });
-  });
 
 const queryActiveTab = async (): Promise<chrome.tabs.Tab | undefined> =>
   new Promise<chrome.tabs.Tab | undefined>((resolve) => {

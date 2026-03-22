@@ -90,10 +90,22 @@ Build the extension first:
 npm run build
 ```
 
+To rebuild automatically while developing:
+
+```bash
+npm run watch:build
+```
+
 For Firefox, build with the Firefox-specific manifest patch:
 
 ```bash
 npm run build:firefox
+```
+
+For a Firefox watch build that reapplies the manifest patch after each rebuild:
+
+```bash
+npm run watch:build:firefox
 ```
 
 ### Chrome / Chromium
@@ -116,7 +128,7 @@ npm run build:firefox
 Notes:
 
 - Firefox temporary add-ons are removed when the browser restarts.
-- Re-run `npm run build:firefox` whenever source changes need to be reflected in `dist/` for Firefox.
+- Re-run `npm run build:firefox` or keep `npm run watch:build:firefox` running whenever source changes need to be reflected in `dist/` for Firefox.
 - The CRX plugin build output is Chromium-first; `build:firefox` patches `dist/manifest.json` to include `background.scripts` as a Firefox fallback.
 
 ## Architecture Summary

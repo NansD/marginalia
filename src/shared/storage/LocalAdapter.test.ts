@@ -6,11 +6,15 @@ import {
 
 const buildAnnotation = (id: string): Annotation => ({
   id,
-  type: 'placeholder',
+  type: 'rectangle',
   createdAt: '2025-01-01T00:00:00.000Z',
   updatedAt: '2025-01-01T00:00:00.000Z',
   content: {
-    kind: 'placeholder',
+    kind: 'rectangle',
+    x: 24,
+    y: 32,
+    width: 120,
+    height: 64,
   },
 });
 

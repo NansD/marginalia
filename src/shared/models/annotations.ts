@@ -1,12 +1,16 @@
-export const ANNOTATION_TYPES = ['placeholder'] as const;
+export const ANNOTATION_TYPES = ['rectangle'] as const;
 
 export type AnnotationType = (typeof ANNOTATION_TYPES)[number];
 
-export interface PlaceholderAnnotationContent {
-  kind: 'placeholder';
+export interface RectangleAnnotationContent {
+  kind: 'rectangle';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-export type AnnotationContent = PlaceholderAnnotationContent;
+export type AnnotationContent = RectangleAnnotationContent;
 
 export interface Annotation {
   id: string;

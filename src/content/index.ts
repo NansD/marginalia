@@ -1,15 +1,22 @@
+import type { Annotation, RectangleAnnotationContent } from '@/shared/models/annotations';
+import { LocalAdapter } from '@/shared/storage/LocalAdapter';
 import {
   type ContentScriptState,
   isRuntimeMessage,
   type RuntimeMessage,
 } from '@/shared/runtime/messages';
-import { ensureShortcutBindings, matchesShortcut, subscribeToShortcutBindings } from '@/shared/runtime/shortcuts';
+import {
+  DEFAULT_SHORTCUT_BINDINGS,
+  ensureShortcutBindings,
+  matchesShortcut,
+  subscribeToShortcutBindings,
+} from '@/shared/runtime/shortcuts';
 import { canonicalizeUrl } from '@/shared/url/canonicalizeUrl';
 
 import { observePageNavigation } from './navigationObserver';
 import { createOverlayController } from './overlayController';
 
-const overlayController = createOverlayController();
+const adapter = new LocalAdapter();
 
 const shouldIgnoreKeyboardEvent = (event: KeyboardEvent): boolean => {
   const eventTarget = event.target;
@@ -33,9 +40,17 @@ const sendRuntimeMessage = async (message: RuntimeMessage): Promise<void> =>
     });
   });
 
+const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+const createAnnotationId = (): string =>
+  typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `annotation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
 const bootstrapContentScript = async (): Promise<void> => {
   let annotationModeEnabled = false;
-  let shortcutBindings = await ensureShortcutBindings();
+  let annotations: Annotation[] = [];
+  let shortcutBindings = DEFAULT_SHORTCUT_BINDINGS;
   let canonicalUrl = canonicalizeUrl(window.location.href);
 
   const publishPageState = async (): Promise<void> => {
@@ -48,8 +63,14 @@ const bootstrapContentScript = async (): Promise<void> => {
   };
 
   const syncOverlay = (): void => {
+    overlayController.setAnnotations(annotations);
     overlayController.setInteractive(annotationModeEnabled);
     overlayController.syncToDocument();
+  };
+
+  const loadAnnotations = async (): Promise<void> => {
+    annotations = await adapter.getAnnotations(canonicalUrl);
+    overlayController.setAnnotations(annotations);
   };
 
   const getState = (): ContentScriptState => ({
@@ -64,6 +85,33 @@ const bootstrapContentScript = async (): Promise<void> => {
 
     return getState();
   };
+
+  const handleCreateAnnotation = async (content: RectangleAnnotationContent): Promise<void> => {
+    const timestamp = new Date().toISOString();
+    const annotation: Annotation = {
+      id: createAnnotationId(),
+      type: 'rectangle',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      content,
+    };
+
+    const savedAnnotation = await adapter.saveAnnotation(canonicalUrl, annotation);
+
+    annotations = [...annotations, savedAnnotation];
+    overlayController.setAnnotations(annotations);
+    await sendRuntimeMessage({ kind: 'annotations-changed', canonicalUrl });
+  };
+
+  const overlayController = createOverlayController(document, window, {
+    onCreateAnnotation: (content) =>
+      handleCreateAnnotation(content).catch((error: unknown) => {
+        console.error(`Marginalia failed to save annotation: ${describeError(error)}`);
+      }),
+    onRequestDisable: async () => {
+      await setAnnotationMode(false);
+    },
+  });
 
   const toggleAnnotationMode = async (): Promise<ContentScriptState> => setAnnotationMode(!annotationModeEnabled);
 
@@ -113,15 +161,23 @@ const bootstrapContentScript = async (): Promise<void> => {
 
   observePageNavigation(({ canonicalUrl: nextCanonicalUrl }) => {
     canonicalUrl = nextCanonicalUrl;
-    overlayController.syncToDocument();
-    void publishPageState();
+    void loadAnnotations()
+      .then(() => {
+        overlayController.syncToDocument();
+        return publishPageState();
+      })
+      .catch((error: unknown) => {
+        console.error(`Marginalia failed to refresh annotations after navigation: ${describeError(error)}`);
+      });
   });
 
   subscribeToShortcutBindings((nextBindings) => {
     shortcutBindings = nextBindings;
   });
 
-  overlayController.syncToDocument();
+  shortcutBindings = await ensureShortcutBindings();
+  await loadAnnotations();
+  syncOverlay();
   await publishPageState();
 };
 
