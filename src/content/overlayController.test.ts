@@ -28,6 +28,9 @@ const getDraftRectangle = (): SVGRectElement | null =>
 const getDraftEllipse = (): SVGEllipseElement | null =>
   getOverlayElement().querySelector<SVGEllipseElement>('g[data-marginalia-layer="drafts"] ellipse');
 
+const getDraftConnector = (): SVGLineElement | null =>
+  getOverlayElement().querySelector<SVGLineElement>('g[data-marginalia-layer="drafts"] line');
+
 describe('createOverlayController', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -212,6 +215,60 @@ describe('createOverlayController', () => {
       text: 'New note',
       title: 'Sticky note',
     });
+  });
+
+  it('creates connectors by clicking a source annotation and then a target annotation', () => {
+    const onCreateAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+
+    controller.setAnnotations([
+      buildRectangleAnnotation('annotation-source'),
+      buildTextAnnotation('annotation-target', {
+        content: {
+          x: 260,
+          y: 64,
+        },
+      }),
+    ]);
+    controller.setInteractive(true);
+    controller.setActiveTool('connector');
+
+    const overlayElement = getOverlayElement();
+    const sourceElement = overlayElement.querySelector('[data-marginalia-annotation-id="annotation-source"]');
+    const targetElement = overlayElement.querySelector('[data-marginalia-annotation-id="annotation-target"]');
+
+    expect(sourceElement).toBeInTheDocument();
+    expect(targetElement).toBeInTheDocument();
+
+    fireEvent.pointerDown(sourceElement!, { button: 0, clientX: 176, clientY: 60, pointerId: 12 });
+
+    expect(screen.getByText(/Source Rectangle annotation selected/)).toBeInTheDocument();
+    expect(
+      overlayElement.querySelector('[data-marginalia-annotation-id="annotation-source"]'),
+    ).toHaveAttribute('data-marginalia-selected', 'true');
+
+    fireEvent.pointerMove(overlayElement, { clientX: 220, clientY: 84, pointerId: 12 });
+
+    expect(getDraftConnector()).toHaveAttribute('x1', '176');
+    expect(getDraftConnector()).toHaveAttribute('y1', '60');
+    expect(getDraftConnector()).toHaveAttribute('x2', '220');
+    expect(getDraftConnector()).toHaveAttribute('y2', '84');
+
+    fireEvent.pointerDown(
+      overlayElement.querySelector('[data-marginalia-annotation-id="annotation-target"]')!,
+      { button: 0, clientX: 260, clientY: 88, pointerId: 13 },
+    );
+
+    expect(onCreateAnnotation).toHaveBeenCalledWith({
+      kind: 'connector',
+      sourceId: 'annotation-source',
+      sourceAnchor: 'right',
+      targetId: 'annotation-target',
+      targetAnchor: 'left',
+      color: 'purple',
+    });
+    expect(getDraftConnector()).not.toBeInTheDocument();
+    expect(screen.getByText('Connector tool active. 2 annotations on this page.')).toBeInTheDocument();
   });
 
   it('ignores other pointer ids and clears drafts through the cancel command', () => {

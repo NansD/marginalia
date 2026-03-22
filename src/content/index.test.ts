@@ -18,7 +18,7 @@ vi.mock('@/shared/runtime/shortcuts', async () => {
 });
 
 describe('content script object tools', () => {
-  it('persists object-tool creations and selected deletion through the overlay flow', async () => {
+  it('persists connector authoring and keeps deletion behavior correct through the overlay flow', async () => {
     await resetLocalAdapterDatabase();
     document.body.innerHTML = '';
     Object.defineProperty(window, 'scrollX', { configurable: true, value: 0 });
@@ -131,14 +131,84 @@ describe('content script object tools', () => {
     });
 
     const savedAnnotations = await adapter.getAnnotations(canonicalUrl);
+    const ellipseAnnotation = savedAnnotations.find((annotation) => annotation.type === 'ellipse');
     const textAnnotation = savedAnnotations.find((annotation) => annotation.type === 'text');
+    const stickyNoteAnnotation = savedAnnotations.find((annotation) => annotation.type === 'sticky-note');
 
+    expect(ellipseAnnotation).toBeDefined();
     expect(textAnnotation).toBeDefined();
+    expect(stickyNoteAnnotation).toBeDefined();
+
+    await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'connector' });
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${ellipseAnnotation!.id}"]`)!, {
+      button: 0,
+      clientX: 120,
+      clientY: 90,
+      pointerId: 4,
+    });
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${textAnnotation!.id}"]`)!, {
+      button: 0,
+      clientX: 48,
+      clientY: 96,
+      pointerId: 5,
+    });
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const connectorAnnotation = annotations.find((annotation) => annotation.type === 'connector');
+
+      expect(annotations.map((annotation) => annotation.type)).toEqual(['ellipse', 'text', 'sticky-note', 'connector']);
+      expect(connectorAnnotation).toMatchObject({
+        content: {
+          kind: 'connector',
+          sourceId: ellipseAnnotation!.id,
+          targetId: textAnnotation!.id,
+          color: 'purple',
+        },
+      });
+    });
+
+    await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'select' });
+    fireEvent.pointerDown(
+      document.querySelector(`[data-marginalia-annotation-kind="connector"]`)!,
+      { button: 0, pointerId: 6 },
+    );
+    fireEvent.click(
+      Array.from(document.querySelectorAll<HTMLButtonElement>('#marginalia-overlay-toolbar button')).find(
+        (button) => button.textContent === 'Delete selected',
+      )!,
+    );
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+
+      expect(annotations.map((annotation) => annotation.type)).toEqual(['ellipse', 'text', 'sticky-note']);
+    });
+
+    await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'connector' });
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${ellipseAnnotation!.id}"]`)!, {
+      button: 0,
+      clientX: 120,
+      clientY: 90,
+      pointerId: 7,
+    });
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${textAnnotation!.id}"]`)!, {
+      button: 0,
+      clientX: 48,
+      clientY: 96,
+      pointerId: 8,
+    });
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+
+      expect(annotations.map((annotation) => annotation.type)).toEqual(['ellipse', 'text', 'sticky-note', 'connector']);
+    });
 
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'select' });
     fireEvent.pointerDown(
       document.querySelector(`[data-marginalia-annotation-id="${textAnnotation!.id}"]`)!,
-      { button: 0, pointerId: 4 },
+      { button: 0, pointerId: 9 },
     );
     fireEvent.click(
       Array.from(document.querySelectorAll<HTMLButtonElement>('#marginalia-overlay-toolbar button')).find(

@@ -102,6 +102,24 @@ const getDeletedAnnotationsForSelection = (
   });
 };
 
+const canCreateConnector = (currentAnnotations: Annotation[], content: AnnotationContent): boolean => {
+  if (content.kind !== 'connector') {
+    return true;
+  }
+
+  if (content.sourceId === content.targetId) {
+    return false;
+  }
+
+  const canvasAnnotationIds = new Set(
+    currentAnnotations
+      .filter((annotation) => annotation.content.kind !== 'connector')
+      .map((annotation) => annotation.id),
+  );
+
+  return canvasAnnotationIds.has(content.sourceId) && canvasAnnotationIds.has(content.targetId);
+};
+
 const bootstrapContentScript = async (): Promise<void> => {
   let annotationModeEnabled = false;
   let annotations: Annotation[] = [];
@@ -227,6 +245,10 @@ const bootstrapContentScript = async (): Promise<void> => {
   };
 
   const handleCreateAnnotation = async (content: AnnotationContent): Promise<void> => {
+    if (!canCreateConnector(annotations, content)) {
+      return;
+    }
+
     const timestamp = new Date().toISOString();
     const annotation = buildAnnotation(content, timestamp);
     const annotationCanonicalUrl = canonicalUrl;

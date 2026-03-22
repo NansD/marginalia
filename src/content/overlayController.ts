@@ -33,6 +33,7 @@ const DEFAULT_TEXT_WIDTH = 220;
 const DEFAULT_TEXT_HEIGHT = 56;
 const DEFAULT_STICKY_NOTE_WIDTH = 220;
 const DEFAULT_STICKY_NOTE_HEIGHT = 160;
+const DEFAULT_CONNECTOR_COLOR: AnnotationPalette = 'purple';
 const TOOL_LABELS: Record<AnnotationTool, string> = {
   select: 'Select',
   text: 'Text',
@@ -47,7 +48,7 @@ const TOOL_HINTS: Record<AnnotationTool, string> = {
   'sticky-note': 'Click anywhere on the page to place a sticky note.',
   rectangle: 'Drag anywhere on the page to draw a rectangle annotation.',
   ellipse: 'Drag anywhere on the page to draw an ellipse annotation.',
-  connector: 'Connector tool selection is ready, but drawing stays in follow-up work.',
+  connector: 'Click a source annotation, then click a target annotation to connect them.',
 };
 const PALETTE_COLORS: Record<AnnotationPalette, string> = {
   yellow: '#f59e0b',
@@ -154,6 +155,25 @@ const resolveAnchorPoint = (bounds: CanvasBounds, anchor: ConnectorAnchor): { x:
   }
 };
 
+const resolveNearestAnchor = (bounds: CanvasBounds, point: { x: number; y: number }): ConnectorAnchor => {
+  const anchors: ConnectorAnchor[] = ['top', 'right', 'bottom', 'left', 'center'];
+
+  let nearestAnchor: ConnectorAnchor = 'center';
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const anchor of anchors) {
+    const anchorPoint = resolveAnchorPoint(bounds, anchor);
+    const distance = Math.hypot(point.x - anchorPoint.x, point.y - anchorPoint.y);
+
+    if (distance < nearestDistance) {
+      nearestAnchor = anchor;
+      nearestDistance = distance;
+    }
+  }
+
+  return nearestAnchor;
+};
+
 const setAnnotationElementState = (
   element: SVGElement,
   annotation: Annotation,
@@ -161,11 +181,14 @@ const setAnnotationElementState = (
   activeTool: AnnotationTool,
   selected: boolean,
 ): void => {
+  const clickable =
+    interactive && (activeTool === 'select' || (activeTool === 'connector' && annotation.content.kind !== 'connector'));
+
   element.dataset.marginaliaAnnotationId = annotation.id;
   element.dataset.marginaliaAnnotationKind = annotation.type;
   element.dataset.marginaliaSelected = selected ? 'true' : 'false';
-  element.style.pointerEvents = interactive && activeTool === 'select' ? 'auto' : 'none';
-  element.style.cursor = interactive && activeTool === 'select' ? 'pointer' : 'default';
+  element.style.pointerEvents = clickable ? 'auto' : 'none';
+  element.style.cursor = clickable ? (activeTool === 'connector' ? 'crosshair' : 'pointer') : 'default';
 };
 
 const createRectangleElement = (
@@ -390,6 +413,9 @@ export const createOverlayController = (
   let draftStartPoint: { x: number; y: number } | null = null;
   let draftShapeKind: ShapeTool | null = null;
   let draftBounds: CanvasBounds | null = null;
+  let connectorSourceAnnotationId: string | null = null;
+  let connectorSourceAnchor: ConnectorAnchor | null = null;
+  let connectorPreviewPoint: { x: number; y: number } | null = null;
 
   const getShouldRenderOverlay = (): boolean => interactive || annotations.length > 0 || draftStartPoint !== null;
 
@@ -400,6 +426,19 @@ export const createOverlayController = (
 
   const getSelectedAnnotation = (): Annotation | undefined =>
     selectedAnnotationId ? annotations.find((annotation) => annotation.id === selectedAnnotationId) : undefined;
+
+  const getCanvasAnnotationById = (annotationId: string | null): CanvasAnnotation | undefined => {
+    if (!annotationId) {
+      return undefined;
+    }
+
+    const annotation = annotations.find((candidate) => candidate.id === annotationId);
+
+    return annotation && isCanvasAnnotation(annotation) ? annotation : undefined;
+  };
+
+  const getPendingConnectorSourceAnnotation = (): CanvasAnnotation | undefined =>
+    getCanvasAnnotationById(connectorSourceAnnotationId);
 
   const clearDraftShape = (): boolean => {
     const hadDraft =
@@ -417,6 +456,17 @@ export const createOverlayController = (
     draftShapeElement = null;
 
     return hadDraft;
+  };
+
+  const clearConnectorDraft = (): boolean => {
+    const hadConnectorDraft =
+      connectorSourceAnnotationId !== null || connectorSourceAnchor !== null || connectorPreviewPoint !== null;
+
+    connectorSourceAnnotationId = null;
+    connectorSourceAnchor = null;
+    connectorPreviewPoint = null;
+
+    return hadConnectorDraft;
   };
 
   const setSelection = (annotationId: string | null, notify = false): boolean => {
@@ -514,6 +564,7 @@ export const createOverlayController = (
         }
 
         clearDraftShape();
+        clearConnectorDraft();
         syncToDocument();
         void controllerOptions.onSelectTool?.(tool);
       });
@@ -588,13 +639,17 @@ export const createOverlayController = (
     }
 
     const selectedAnnotation = getSelectedAnnotation();
-    toolbarStatusElement.textContent = selectedAnnotation
-      ? `${TOOL_LABELS[activeTool]} tool active. Selected ${TOOL_LABELS[selectedAnnotation.type]} annotation.`
-      : `${TOOL_LABELS[activeTool]} tool active. ${
-          annotations.length === 0
-            ? 'No annotations on this page yet.'
-            : `${annotations.length} annotation${annotations.length === 1 ? '' : 's'} on this page.`
-        }`;
+    const pendingConnectorSourceAnnotation = getPendingConnectorSourceAnnotation();
+    toolbarStatusElement.textContent =
+      activeTool === 'connector' && pendingConnectorSourceAnnotation
+        ? `Connector tool active. Source ${TOOL_LABELS[pendingConnectorSourceAnnotation.type]} annotation selected. Click another annotation to finish.`
+        : selectedAnnotation
+          ? `${TOOL_LABELS[activeTool]} tool active. Selected ${TOOL_LABELS[selectedAnnotation.type]} annotation.`
+          : `${TOOL_LABELS[activeTool]} tool active. ${
+              annotations.length === 0
+                ? 'No annotations on this page yet.'
+                : `${annotations.length} annotation${annotations.length === 1 ? '' : 's'} on this page.`
+            }`;
     toolbarDeleteButtonElement.disabled = selectedAnnotation === undefined;
     toolbarDeleteButtonElement.style.opacity = selectedAnnotation ? '1' : '0.5';
     toolbarDeleteButtonElement.style.cursor = selectedAnnotation ? 'pointer' : 'not-allowed';
@@ -662,7 +717,7 @@ export const createOverlayController = (
         annotation,
         interactive,
         activeTool,
-        selectedAnnotationId,
+        annotation.id === connectorSourceAnnotationId ? annotation.id : selectedAnnotationId,
         canvasAnnotationsById,
       );
 
@@ -678,6 +733,30 @@ export const createOverlayController = (
     }
 
     annotationsLayer.replaceChildren(...connectorElements, ...annotationElements);
+
+    if (draftLayer) {
+      draftLayer.replaceChildren(...(draftShapeElement ? [draftShapeElement] : []));
+    }
+
+    const pendingConnectorSourceAnnotation = getPendingConnectorSourceAnnotation();
+
+    if (!draftLayer || !pendingConnectorSourceAnnotation || !connectorSourceAnchor || !connectorPreviewPoint) {
+      return;
+    }
+
+    const start = resolveAnchorPoint(pendingConnectorSourceAnnotation.content, connectorSourceAnchor);
+    const draftConnectorElement = documentRef.createElementNS(SVG_NAMESPACE, 'line');
+    draftConnectorElement.setAttribute('x1', `${start.x}`);
+    draftConnectorElement.setAttribute('y1', `${start.y}`);
+    draftConnectorElement.setAttribute('x2', `${connectorPreviewPoint.x}`);
+    draftConnectorElement.setAttribute('y2', `${connectorPreviewPoint.y}`);
+    draftConnectorElement.setAttribute('stroke', ACCENT_COLOR);
+    draftConnectorElement.setAttribute('stroke-width', '2');
+    draftConnectorElement.setAttribute('stroke-dasharray', '8 6');
+    draftConnectorElement.setAttribute('stroke-opacity', '0.7');
+    draftConnectorElement.setAttribute('vector-effect', 'non-scaling-stroke');
+    draftConnectorElement.style.pointerEvents = 'none';
+    draftLayer.append(draftConnectorElement);
   };
 
   const syncToDocument = (): void => {
@@ -831,6 +910,51 @@ export const createOverlayController = (
 
     event.preventDefault();
 
+    if (activeTool === 'connector') {
+      const annotation = getCanvasAnnotationById(annotationId);
+
+      if (!annotation) {
+        if (clearConnectorDraft()) {
+          syncToDocument();
+        }
+
+        return;
+      }
+
+      const point = toPagePoint(event);
+      const anchor = resolveNearestAnchor(annotation.content, point);
+
+      if (!connectorSourceAnnotationId || !connectorSourceAnchor) {
+        connectorSourceAnnotationId = annotation.id;
+        connectorSourceAnchor = anchor;
+        connectorPreviewPoint = point;
+        syncToDocument();
+
+        return;
+      }
+
+      if (connectorSourceAnnotationId === annotation.id) {
+        clearConnectorDraft();
+        syncToDocument();
+
+        return;
+      }
+
+      void controllerOptions.onCreateAnnotation?.({
+        kind: 'connector',
+        sourceId: connectorSourceAnnotationId,
+        sourceAnchor: connectorSourceAnchor,
+        targetId: annotation.id,
+        targetAnchor: anchor,
+        color: DEFAULT_CONNECTOR_COLOR,
+      });
+
+      clearConnectorDraft();
+      syncToDocument();
+
+      return;
+    }
+
     if (isShapeTool(activeTool)) {
       draftPointerId = event.pointerId;
       draftStartPoint = toPagePoint(event);
@@ -857,6 +981,13 @@ export const createOverlayController = (
   }
 
   function handlePointerMove(event: PointerEvent): void {
+    if (interactive && activeTool === 'connector' && connectorSourceAnnotationId) {
+      connectorPreviewPoint = toPagePoint(event);
+      syncToDocument();
+
+      return;
+    }
+
     if (!interactive || !isShapeTool(activeTool) || draftStartPoint === null || draftPointerId !== event.pointerId) {
       return;
     }
@@ -912,6 +1043,7 @@ export const createOverlayController = (
     let cancelled = false;
 
     cancelled = clearDraftShape() || cancelled;
+    cancelled = clearConnectorDraft() || cancelled;
     cancelled = setSelection(null, true) || cancelled;
 
     if (cancelled) {
@@ -927,6 +1059,7 @@ export const createOverlayController = (
 
       if (!enabled) {
         clearDraftShape();
+        clearConnectorDraft();
       }
 
       syncToDocument();
@@ -936,6 +1069,10 @@ export const createOverlayController = (
 
       if (selectedAnnotationId && !annotations.some((annotation) => annotation.id === selectedAnnotationId)) {
         setSelection(null, true);
+      }
+
+      if (!getPendingConnectorSourceAnnotation()) {
+        clearConnectorDraft();
       }
 
       syncToDocument();
@@ -948,6 +1085,7 @@ export const createOverlayController = (
       activeTool = tool;
 
       clearDraftShape();
+      clearConnectorDraft();
 
       if (tool !== 'select') {
         setSelection(null, true);
