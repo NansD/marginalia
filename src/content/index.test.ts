@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import type { ContentScriptState, RuntimeMessage } from '@/shared/runtime/messages';
 import { LocalAdapter, resetLocalAdapterDatabase } from '@/shared/storage/LocalAdapter';
+import { buildRectangleAnnotation, buildTextAnnotation } from '@/test/factories';
 
 vi.mock('./navigationObserver', () => ({
   observePageNavigation: vi.fn(() => ({ disconnect: vi.fn() })),
@@ -188,8 +189,8 @@ describe('content script object tools', () => {
       pointerId: 6,
     });
 
-    expect(screen.queryByRole('spinbutton', { name: 'Annotation rotation' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reset annotation rotation' })).not.toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Annotation rotation' })).toHaveValue(0);
+    expect(screen.getByRole('button', { name: 'Reset annotation rotation' })).toBeDisabled();
 
     const rotationHandle = document.querySelector('[data-marginalia-rotation-handle="true"]');
     expect(rotationHandle).toBeInTheDocument();
@@ -527,6 +528,259 @@ describe('content script object tools', () => {
           kind: 'sticky-note',
           title: 'Edited sticky title',
           text: 'Edited sticky body',
+        },
+      });
+    });
+  });
+
+  it('persists shape color changes from the toolbar palette', async () => {
+    const databaseName = `marginalia-content-index-${crypto.randomUUID()}`;
+    (globalThis as { __MARGINALIA_LOCAL_ADAPTER_DB_NAME__?: string }).__MARGINALIA_LOCAL_ADAPTER_DB_NAME__ =
+      databaseName;
+    await resetLocalAdapterDatabase(databaseName);
+    document.body.innerHTML = '';
+    Object.defineProperty(window, 'scrollX', { configurable: true, value: 0 });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
+
+    class ResizeObserverMock {
+      public observe = vi.fn();
+      public disconnect = vi.fn();
+    }
+
+    const runtimeListeners: Array<
+      (
+        message: unknown,
+        sender: chrome.runtime.MessageSender,
+        sendResponse: (response?: ContentScriptState) => void,
+      ) => boolean | undefined
+    > = [];
+    type RuntimeListener = (typeof runtimeListeners)[number];
+    const sendMessage = vi.fn((_message: RuntimeMessage, callback?: () => void) => {
+      callback?.();
+    });
+
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+    vi.stubGlobal('chrome', {
+      runtime: {
+        sendMessage,
+        onMessage: {
+          addListener: vi.fn((listener: RuntimeListener) => {
+            runtimeListeners.push(listener);
+          }),
+        },
+        lastError: undefined,
+      },
+      storage: {
+        sync: {
+          get: vi.fn((key: string, callback: (items: Record<string, unknown>) => void) => {
+            callback({ [key]: undefined });
+          }),
+          set: vi.fn((_: Record<string, unknown>, callback: () => void) => {
+            callback();
+          }),
+          onChanged: {
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+          },
+        },
+      },
+    });
+
+    vi.resetModules();
+    await import('./index');
+
+    const dispatchRuntimeMessage = async (message: RuntimeMessage): Promise<ContentScriptState | undefined> => {
+      const listener = runtimeListeners.at(-1);
+      expect(listener).toBeDefined();
+
+      return new Promise<ContentScriptState | undefined>((resolve) => {
+        listener!(message, {} as chrome.runtime.MessageSender, (response) => {
+          resolve(response);
+        });
+      });
+    };
+
+    await dispatchRuntimeMessage({ kind: 'set-annotation-mode', enabled: true });
+
+    const overlayElement = document.querySelector<SVGSVGElement>('#marginalia-overlay');
+    const adapter = new LocalAdapter();
+    const canonicalUrl = 'http://localhost:3000/';
+    expect(overlayElement).toBeInTheDocument();
+
+    fireEvent.pointerDown(overlayElement!, { button: 0, clientX: 42, clientY: 52, pointerId: 31 });
+    fireEvent.pointerMove(overlayElement!, { clientX: 162, clientY: 112, pointerId: 31 });
+    fireEvent.pointerUp(overlayElement!, { pointerId: 31 });
+
+    await waitFor(async () => {
+      const [rectangleAnnotation] = await adapter.getAnnotations(canonicalUrl);
+
+      expect(rectangleAnnotation).toMatchObject({
+        type: 'rectangle',
+        content: {
+          kind: 'rectangle',
+        },
+      });
+      expect(rectangleAnnotation?.content).not.toHaveProperty('color');
+    });
+
+    const [rectangleAnnotation] = await adapter.getAnnotations(canonicalUrl);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${rectangleAnnotation!.id}"]`)!, {
+      button: 0,
+      pointerId: 32,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Set Rectangle color to orange' }));
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const recoloredRectangle = annotations.find((annotation) => annotation.id === rectangleAnnotation!.id);
+
+      expect(recoloredRectangle).toMatchObject({
+        content: {
+          kind: 'rectangle',
+          color: 'orange',
+        },
+      });
+    });
+  });
+
+  it('cycles selection with Tab and nudges selected canvas annotations with arrow keys', async () => {
+    const databaseName = `marginalia-content-index-${crypto.randomUUID()}`;
+    (globalThis as { __MARGINALIA_LOCAL_ADAPTER_DB_NAME__?: string }).__MARGINALIA_LOCAL_ADAPTER_DB_NAME__ =
+      databaseName;
+    await resetLocalAdapterDatabase(databaseName);
+    document.body.innerHTML = '';
+    Object.defineProperty(window, 'scrollX', { configurable: true, value: 0 });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
+
+    class ResizeObserverMock {
+      public observe = vi.fn();
+      public disconnect = vi.fn();
+    }
+
+    const runtimeListeners: Array<
+      (
+        message: unknown,
+        sender: chrome.runtime.MessageSender,
+        sendResponse: (response?: ContentScriptState) => void,
+      ) => boolean | undefined
+    > = [];
+    type RuntimeListener = (typeof runtimeListeners)[number];
+    const sendMessage = vi.fn((_message: RuntimeMessage, callback?: () => void) => {
+      callback?.();
+    });
+
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+    vi.stubGlobal('chrome', {
+      runtime: {
+        sendMessage,
+        onMessage: {
+          addListener: vi.fn((listener: RuntimeListener) => {
+            runtimeListeners.push(listener);
+          }),
+        },
+        lastError: undefined,
+      },
+      storage: {
+        sync: {
+          get: vi.fn((key: string, callback: (items: Record<string, unknown>) => void) => {
+            callback({ [key]: undefined });
+          }),
+          set: vi.fn((_: Record<string, unknown>, callback: () => void) => {
+            callback();
+          }),
+          onChanged: {
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+          },
+        },
+      },
+    });
+
+    const adapter = new LocalAdapter();
+    const canonicalUrl = 'http://localhost:3000/';
+    await adapter.saveAnnotation(canonicalUrl, buildRectangleAnnotation('annotation-first'));
+    await adapter.saveAnnotation(
+      canonicalUrl,
+      buildTextAnnotation('annotation-second', {
+        content: {
+          x: 220,
+          y: 64,
+          text: 'Second',
+        },
+      }),
+    );
+
+    vi.resetModules();
+    await import('./index');
+
+    const dispatchRuntimeMessage = async (message: RuntimeMessage): Promise<ContentScriptState | undefined> => {
+      const listener = runtimeListeners.at(-1);
+      expect(listener).toBeDefined();
+
+      return new Promise<ContentScriptState | undefined>((resolve) => {
+        listener!(message, {} as chrome.runtime.MessageSender, (response) => {
+          resolve(response);
+        });
+      });
+    };
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          annotationModeEnabled: false,
+          canonicalUrl,
+          kind: 'page-state-changed',
+        }),
+        expect.any(Function),
+      );
+    });
+
+    await dispatchRuntimeMessage({ kind: 'set-annotation-mode', enabled: true });
+    await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'select' });
+
+    fireEvent.keyDown(document, { code: 'Tab', key: 'Tab' });
+    expect(document.querySelector('[data-marginalia-annotation-id="annotation-first"]')).toHaveAttribute(
+      'data-marginalia-selected',
+      'true',
+    );
+
+    fireEvent.keyDown(document, { code: 'Tab', key: 'Tab' });
+    expect(document.querySelector('[data-marginalia-annotation-id="annotation-second"]')).toHaveAttribute(
+      'data-marginalia-selected',
+      'true',
+    );
+
+    fireEvent.keyDown(document, { code: 'Tab', key: 'Tab', shiftKey: true });
+    expect(document.querySelector('[data-marginalia-annotation-id="annotation-first"]')).toHaveAttribute(
+      'data-marginalia-selected',
+      'true',
+    );
+
+    fireEvent.keyDown(document, { code: 'ArrowRight', key: 'ArrowRight' });
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const nudgedAnnotation = annotations.find((annotation) => annotation.id === 'annotation-first');
+
+      expect(nudgedAnnotation).toMatchObject({
+        content: {
+          kind: 'rectangle',
+          x: 17,
+          y: 24,
+        },
+      });
+    });
+
+    fireEvent.keyDown(document, { code: 'ArrowDown', key: 'ArrowDown', shiftKey: true });
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const nudgedAnnotation = annotations.find((annotation) => annotation.id === 'annotation-first');
+
+      expect(nudgedAnnotation).toMatchObject({
+        content: {
+          kind: 'rectangle',
+          x: 17,
+          y: 34,
         },
       });
     });

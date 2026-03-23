@@ -36,6 +36,11 @@ const getDraftConnector = (): SVGLineElement | null =>
 const getRotationHandle = (): SVGCircleElement | null =>
   getOverlayElement().querySelector<SVGCircleElement>('[data-marginalia-rotation-handle="true"]');
 
+const getConnectorHandle = (endpoint: 'source' | 'target'): SVGCircleElement | null =>
+  getOverlayElement().querySelector<SVGCircleElement>(
+    `[data-marginalia-connector-handle="${endpoint}"] [data-marginalia-connector-handle-visual="true"]`,
+  );
+
 const flushMicrotasks = async (): Promise<void> => {
   await Promise.resolve();
   await Promise.resolve();
@@ -462,6 +467,42 @@ describe('createOverlayController', () => {
     expect(onRunCommand).toHaveBeenCalledWith('delete-selected-annotation');
   });
 
+  it('selects connectors in select mode and shows direct anchor handles', () => {
+    const controller = createOverlayController(document, window);
+
+    controller.setAnnotations([
+      buildRectangleAnnotation('annotation-source'),
+      buildTextAnnotation('annotation-target', {
+        content: {
+          x: 260,
+          y: 64,
+        },
+      }),
+      buildConnectorAnnotation('annotation-connector', {
+        content: {
+          sourceId: 'annotation-source',
+          targetId: 'annotation-target',
+          targetAnchor: 'left',
+        },
+      }),
+    ]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const connectorElement = getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-connector"]');
+
+    expect(connectorElement).toBeInTheDocument();
+
+    fireEvent.pointerDown(connectorElement!, { button: 0, clientX: 176, clientY: 60, pointerId: 31 });
+
+    expect(getOverlayElement()).toHaveAttribute('data-selection', 'single');
+    expect(screen.getByText('Select tool active. Selected Connector annotation.')).toBeInTheDocument();
+    expect(getConnectorHandle('source')).toHaveAttribute('cx', '176');
+    expect(getConnectorHandle('source')).toHaveAttribute('cy', '60');
+    expect(getConnectorHandle('target')).toHaveAttribute('cx', '260');
+    expect(getConnectorHandle('target')).toHaveAttribute('cy', '88');
+  });
+
   it('starts inline editing immediately after creating a text annotation', async () => {
     const onEditAnnotation = vi.fn();
     const onCreateAnnotation = vi.fn((content: AnnotationContent) => {
@@ -625,6 +666,120 @@ describe('createOverlayController', () => {
     );
   });
 
+  it('makes empty shape text editing obvious from the toolbar affordance', () => {
+    const controller = createOverlayController(document, window);
+
+    controller.setAnnotations([buildRectangleAnnotation('annotation-rectangle-empty')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector(
+      '[data-marginalia-annotation-id="annotation-rectangle-empty"]',
+    );
+
+    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 44 });
+
+    expect(screen.getByText('Text & color')).toBeInTheDocument();
+    expect(screen.getByText('No text yet — add a short label so this shape is easy to find again.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add text' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add text' }));
+
+    expect(screen.getByLabelText('Rectangle text editor')).toBeInTheDocument();
+  });
+
+  it('updates selected rectangle colors from the toolbar palette', async () => {
+    const onEditAnnotation = vi.fn((annotationId: string, content: AnnotationContent) => {
+      if (content.kind !== 'rectangle') {
+        throw new Error('Expected rectangle annotation content');
+      }
+
+      controller.setAnnotations([buildRectangleAnnotation(annotationId, { content })]);
+
+      return Promise.resolve();
+    });
+
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+    controller.setAnnotations([buildRectangleAnnotation('annotation-rectangle-color')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector(
+      '[data-marginalia-annotation-id="annotation-rectangle-color"]',
+    );
+
+    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 45 });
+    fireEvent.click(screen.getByRole('button', { name: 'Set Rectangle color to orange' }));
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-rectangle-color',
+      expect.objectContaining({
+        kind: 'rectangle',
+        color: 'orange',
+      }),
+    );
+
+    controller.setSelection(null);
+
+    const rectangle = getOverlayElement().querySelector<SVGRectElement>(
+      '[data-marginalia-annotation-id="annotation-rectangle-color"] rect',
+    );
+    expect(rectangle).toHaveAttribute('stroke', '#f97316');
+  });
+
+  it('updates selected annotation rotation from the toolbar transform controls', async () => {
+    const onEditAnnotation = vi.fn((annotationId: string, content: AnnotationContent) => {
+      if (content.kind !== 'rectangle') {
+        throw new Error('Expected rectangle annotation content');
+      }
+
+      controller.setAnnotations([buildRectangleAnnotation(annotationId, { content })]);
+
+      return Promise.resolve();
+    });
+
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+    controller.setAnnotations([buildRectangleAnnotation('annotation-rectangle-rotation')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector(
+      '[data-marginalia-annotation-id="annotation-rectangle-rotation"]',
+    );
+
+    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 46 });
+
+    const rotationInput = screen.getByRole('spinbutton', { name: 'Annotation rotation' });
+    expect(rotationInput).toHaveValue(0);
+    expect(screen.getByRole('button', { name: 'Reset annotation rotation' })).toBeDisabled();
+
+    fireEvent.change(rotationInput, { target: { value: '45' } });
+    fireEvent.blur(rotationInput);
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-rectangle-rotation',
+      expect.objectContaining({
+        kind: 'rectangle',
+        rotation: 45,
+      }),
+    );
+    expect(screen.getByRole('spinbutton', { name: 'Annotation rotation' })).toHaveValue(45);
+    expect(screen.getByRole('button', { name: 'Reset annotation rotation' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset annotation rotation' }));
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenLastCalledWith(
+      'annotation-rectangle-rotation',
+      expect.objectContaining({
+        kind: 'rectangle',
+        rotation: 0,
+      }),
+    );
+  });
+
   it('drags selected canvas annotations in select mode and keeps connectors aligned', () => {
     const onMoveAnnotation = vi.fn();
     const controller = createOverlayController(document, window, { onMoveAnnotation });
@@ -658,6 +813,9 @@ describe('createOverlayController', () => {
     expect(sourceElement).toBeInTheDocument();
 
     fireEvent.pointerDown(sourceElement!, { button: 0, clientX: 80, clientY: 56, pointerId: 14 });
+    expect(getRotationHandle()).toHaveAttribute('cx', '96');
+    expect(getRotationHandle()).toHaveAttribute('cy', '6');
+
     fireEvent.pointerMove(overlayElement, { clientX: 120, clientY: 76, pointerId: 14 });
 
     expect(
@@ -666,6 +824,8 @@ describe('createOverlayController', () => {
     expect(
       overlayElement.querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
     ).toHaveAttribute('y1', '80');
+    expect(getRotationHandle()).toHaveAttribute('cx', '136');
+    expect(getRotationHandle()).toHaveAttribute('cy', '26');
 
     fireEvent.pointerUp(overlayElement, { pointerId: 14 });
 
@@ -677,7 +837,7 @@ describe('createOverlayController', () => {
     });
   });
 
-  it('rotates selected annotations from the on-canvas handle and keeps connectors aligned', async () => {
+  it('snaps rotation gestures to the nearest cardinal angle and keeps connectors aligned', async () => {
     const targetAnnotation = buildTextAnnotation('annotation-target', {
       content: {
         x: 260,
@@ -714,8 +874,8 @@ describe('createOverlayController', () => {
       { button: 0, pointerId: 29 },
     );
 
-    expect(screen.queryByRole('spinbutton', { name: 'Annotation rotation' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reset annotation rotation' })).not.toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Annotation rotation' })).toHaveValue(0);
+    expect(screen.getByRole('button', { name: 'Reset annotation rotation' })).toBeDisabled();
     expect(getRotationHandle()).toBeInTheDocument();
     expect(
       getOverlayElement().querySelector('g[data-marginalia-layer="selection"]'),
@@ -727,7 +887,14 @@ describe('createOverlayController', () => {
     expect(getOverlayElement()).toHaveAttribute('data-selection', 'single');
     expect(screen.getByText('Select tool active. Selected Rectangle annotation.')).toBeInTheDocument();
 
-    fireEvent.pointerMove(getOverlayElement(), { clientX: 176, clientY: 60, pointerId: 30 });
+    fireEvent.pointerMove(getOverlayElement(), { clientX: 176, clientY: 54, pointerId: 30 });
+
+    expect(
+      getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-source"]'),
+    ).toHaveAttribute('transform', 'rotate(90 96 60)');
+    expect(getRotationHandle()).toHaveAttribute('cx', '150');
+    expect(getRotationHandle()).toHaveAttribute('cy', '60');
+
     fireEvent.pointerUp(getOverlayElement(), { pointerId: 30 });
     await flushMicrotasks();
 
@@ -747,6 +914,83 @@ describe('createOverlayController', () => {
     expect(
       getOverlayElement().querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
     ).toHaveAttribute('y1', '140');
+  });
+
+  it('repositions connector anchors by dragging the on-canvas endpoint handles', async () => {
+    const onEditAnnotation = vi.fn((annotationId: string, content: AnnotationContent) => {
+      if (content.kind !== 'connector') {
+        throw new Error('Expected connector annotation content');
+      }
+
+      controller.setAnnotations([
+        buildRectangleAnnotation('annotation-source'),
+        buildTextAnnotation('annotation-target', {
+          content: {
+            x: 260,
+            y: 64,
+          },
+        }),
+        buildConnectorAnnotation(annotationId, { content }),
+      ]);
+
+      return Promise.resolve();
+    });
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+
+    controller.setAnnotations([
+      buildRectangleAnnotation('annotation-source'),
+      buildTextAnnotation('annotation-target', {
+        content: {
+          x: 260,
+          y: 64,
+        },
+      }),
+      buildConnectorAnnotation('annotation-connector', {
+        content: {
+          sourceId: 'annotation-source',
+          targetId: 'annotation-target',
+          targetAnchor: 'left',
+        },
+      }),
+    ]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    fireEvent.pointerDown(
+      getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-connector"]')!,
+      { button: 0, clientX: 176, clientY: 60, pointerId: 41 },
+    );
+
+    expect(getConnectorHandle('source')).toHaveAttribute('cx', '176');
+    expect(getConnectorHandle('source')).toHaveAttribute('cy', '60');
+
+    fireEvent.pointerDown(getConnectorHandle('source')!, { button: 0, clientX: 176, clientY: 60, pointerId: 42 });
+    fireEvent.pointerMove(getOverlayElement(), { clientX: 96, clientY: 24, pointerId: 42 });
+
+    expect(
+      getOverlayElement().querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
+    ).toHaveAttribute('x1', '96');
+    expect(
+      getOverlayElement().querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
+    ).toHaveAttribute('y1', '24');
+    expect(getConnectorHandle('source')).toHaveAttribute('cx', '96');
+    expect(getConnectorHandle('source')).toHaveAttribute('cy', '24');
+
+    fireEvent.pointerUp(getOverlayElement(), { pointerId: 42 });
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-connector',
+      expect.objectContaining({
+        kind: 'connector',
+        sourceId: 'annotation-source',
+        sourceAnchor: 'top',
+        targetId: 'annotation-target',
+        targetAnchor: 'left',
+      }),
+    );
+    expect(getConnectorHandle('source')).toHaveAttribute('cx', '96');
+    expect(getConnectorHandle('source')).toHaveAttribute('cy', '24');
   });
 
   it('queues document sync through requestAnimationFrame on scroll and resize', () => {

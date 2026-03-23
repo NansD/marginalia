@@ -138,6 +138,7 @@ const bootstrapContentScript = async (): Promise<void> => {
   let activeTool: AnnotationTool = 'rectangle';
   let selectedAnnotationId: string | null = null;
   const commandHistory = new CommandHistory();
+  let keyboardMoveQueue = Promise.resolve();
 
   const publishPageState = async (): Promise<void> => {
     await sendRuntimeMessage({
@@ -196,6 +197,66 @@ const bootstrapContentScript = async (): Promise<void> => {
     overlayController.setSelection(selectedAnnotationId);
 
     return getState();
+  };
+
+  const cycleSelection = (direction: 1 | -1): boolean => {
+    if (!annotationModeEnabled || activeTool !== 'select' || annotations.length === 0) {
+      return false;
+    }
+
+    const currentIndex = selectedAnnotationId
+      ? annotations.findIndex((annotation) => annotation.id === selectedAnnotationId)
+      : -1;
+    const nextIndex =
+      currentIndex === -1
+        ? direction > 0
+          ? 0
+          : annotations.length - 1
+        : (currentIndex + direction + annotations.length) % annotations.length;
+    const nextAnnotation = annotations[nextIndex];
+
+    if (!nextAnnotation) {
+      return false;
+    }
+
+    selectedAnnotationId = nextAnnotation.id;
+    overlayController.setSelection(nextAnnotation.id);
+
+    return true;
+  };
+
+  const queueSelectedAnnotationMove = (deltaX: number, deltaY: number): boolean => {
+    if (!annotationModeEnabled || activeTool !== 'select' || !selectedAnnotationId) {
+      return false;
+    }
+
+    const annotationId = selectedAnnotationId;
+    const selectedAnnotation = annotations.find((annotation) => annotation.id === annotationId);
+
+    if (!selectedAnnotation || !isCanvasAnnotation(selectedAnnotation)) {
+      return false;
+    }
+
+    keyboardMoveQueue = keyboardMoveQueue
+      .then(async () => {
+        const currentAnnotation = annotations.find((annotation) => annotation.id === annotationId);
+
+        if (!currentAnnotation || !isCanvasAnnotation(currentAnnotation)) {
+          return;
+        }
+
+        await handleMoveAnnotation(annotationId, {
+          x: currentAnnotation.content.x + deltaX,
+          y: currentAnnotation.content.y + deltaY,
+          width: currentAnnotation.content.width,
+          height: currentAnnotation.content.height,
+        });
+      })
+      .catch((error: unknown) => {
+        console.error(`Marginalia failed to move annotation from the keyboard: ${describeError(error)}`);
+      });
+
+    return true;
   };
 
   const handleAnnotationCommand = async (command: AnnotationCommand): Promise<ContentScriptState> => {
@@ -475,6 +536,39 @@ const bootstrapContentScript = async (): Promise<void> => {
     (event) => {
       if (shouldIgnoreKeyboardEventTarget(event)) {
         return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && event.code === 'Tab') {
+        if (cycleSelection(event.shiftKey ? -1 : 1)) {
+          event.preventDefault();
+        }
+
+        return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+        const keyboardMoveDistance = event.shiftKey ? 10 : 1;
+        let handledMove = false;
+
+        switch (event.code) {
+          case 'ArrowLeft':
+            handledMove = queueSelectedAnnotationMove(-keyboardMoveDistance, 0);
+            break;
+          case 'ArrowRight':
+            handledMove = queueSelectedAnnotationMove(keyboardMoveDistance, 0);
+            break;
+          case 'ArrowUp':
+            handledMove = queueSelectedAnnotationMove(0, -keyboardMoveDistance);
+            break;
+          case 'ArrowDown':
+            handledMove = queueSelectedAnnotationMove(0, keyboardMoveDistance);
+            break;
+        }
+
+        if (handledMove) {
+          event.preventDefault();
+          return;
+        }
       }
 
       const matchedAction = findMatchingShortcutAction(shortcutBindings, event);

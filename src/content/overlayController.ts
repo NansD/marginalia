@@ -1,4 +1,5 @@
 import {
+  ANNOTATION_PALETTE,
   DEFAULT_CANVAS_ROTATION,
   DEFAULT_TEXT_BORDER_VISIBLE,
   isCanvasAnnotation,
@@ -52,6 +53,13 @@ const ROTATION_HANDLE_RADIUS = 7;
 const ROTATION_HANDLE_HIT_RADIUS = 16;
 const ROTATION_HANDLE_MIN_OFFSET = 18;
 const ROTATION_HANDLE_MAX_OFFSET = 28;
+const CONNECTOR_HANDLE_RADIUS = 6;
+const CONNECTOR_HANDLE_HIT_RADIUS = 14;
+const CONNECTOR_SOURCE_HANDLE_COLOR = '#312e81';
+const CONNECTOR_TARGET_HANDLE_COLOR = '#4f46e5';
+const ROTATION_SNAP_ANGLES = [-180, -90, 0, 90, 180] as const;
+const ROTATION_SNAP_THRESHOLD_DEGREES = 8;
+const ROTATION_SNAP_RELEASE_THRESHOLD_DEGREES = 12;
 const PALETTE_COLORS: Record<AnnotationPalette, string> = {
   yellow: '#f59e0b',
   pink: '#ec4899',
@@ -86,8 +94,10 @@ type OverlayWindow = Window & {
 };
 
 type ShapeTool = Extract<AnnotationTool, 'circle' | 'ellipse' | 'rectangle'>;
+type ConnectorEndpoint = 'source' | 'target';
 type TextEditableAnnotation = CircleAnnotation | EllipseAnnotation | RectangleAnnotation | TextAnnotation;
 type EditableAnnotation = StickyNoteAnnotation | TextEditableAnnotation;
+type ColorEditableAnnotation = EditableAnnotation;
 type EditingDraft =
   | {
       annotationId: string;
@@ -166,6 +176,51 @@ const normalizeRotation = (rotation: number): number => {
 
 const clampRotationInput = (rotation: number): number =>
   Math.max(-180, Math.min(180, rotation));
+
+const getRotationDelta = (rotation: number, referenceRotation: number): number =>
+  normalizeRotation(rotation - referenceRotation);
+
+const getRotationDistance = (rotation: number, referenceRotation: number): number =>
+  Math.abs(getRotationDelta(rotation, referenceRotation));
+
+const resolveRotationSnap = (
+  rotation: number,
+  activeSnapTarget: number | null,
+): { rotation: number; snapTarget: number | null } => {
+  if (
+    activeSnapTarget !== null &&
+    getRotationDistance(rotation, activeSnapTarget) <= ROTATION_SNAP_RELEASE_THRESHOLD_DEGREES
+  ) {
+    return {
+      rotation: normalizeRotation(activeSnapTarget),
+      snapTarget: activeSnapTarget,
+    };
+  }
+
+  let closestSnapTarget: number | null = null;
+  let closestSnapDistance = Number.POSITIVE_INFINITY;
+
+  for (const snapTarget of ROTATION_SNAP_ANGLES) {
+    const snapDistance = getRotationDistance(rotation, snapTarget);
+
+    if (snapDistance < closestSnapDistance) {
+      closestSnapTarget = snapTarget;
+      closestSnapDistance = snapDistance;
+    }
+  }
+
+  if (closestSnapTarget !== null && closestSnapDistance <= ROTATION_SNAP_THRESHOLD_DEGREES) {
+    return {
+      rotation: normalizeRotation(closestSnapTarget),
+      snapTarget: closestSnapTarget,
+    };
+  }
+
+  return {
+    rotation: normalizeRotation(rotation),
+    snapTarget: null,
+  };
+};
 
 const getCanvasAnnotationCenter = (bounds: CanvasBounds): { x: number; y: number } => ({
   x: bounds.x + bounds.width / 2,
@@ -303,6 +358,20 @@ const isTextEditableAnnotation = (annotation: Annotation | undefined): annotatio
   annotation?.type === 'circle';
 const isEditableAnnotation = (annotation: Annotation | undefined): annotation is EditableAnnotation =>
   isTextEditableAnnotation(annotation) || annotation?.type === 'sticky-note';
+const isColorEditableAnnotation = (annotation: Annotation | undefined): annotation is ColorEditableAnnotation =>
+  isEditableAnnotation(annotation);
+const getDefaultPaletteColorForAnnotation = (
+  annotation: ColorEditableAnnotation,
+): AnnotationPalette | undefined =>
+  annotation.type === 'circle'
+    ? DEFAULT_CIRCLE_COLOR
+    : annotation.type === 'ellipse'
+      ? DEFAULT_ELLIPSE_COLOR
+      : annotation.type === 'sticky-note'
+        ? 'yellow'
+        : annotation.type === 'text'
+          ? 'blue'
+          : undefined;
 
 const createMultilineText = (
   documentRef: Document,
@@ -771,6 +840,70 @@ const createRotationHandleElement = (
   return group;
 };
 
+const createConnectorHandleElement = (
+  documentRef: Document,
+  connector: ConnectorAnnotation,
+  endpoint: ConnectorEndpoint,
+  canvasAnnotationsById: Map<string, CanvasAnnotation>,
+  active: boolean,
+): SVGGElement | null => {
+  const attachedAnnotation = canvasAnnotationsById.get(
+    endpoint === 'source' ? connector.content.sourceId : connector.content.targetId,
+  );
+  const anchor = endpoint === 'source' ? connector.content.sourceAnchor : connector.content.targetAnchor;
+
+  if (!attachedAnnotation) {
+    return null;
+  }
+
+  const center = resolveAnchorPoint(attachedAnnotation.content, anchor);
+  const color = endpoint === 'source' ? CONNECTOR_SOURCE_HANDLE_COLOR : CONNECTOR_TARGET_HANDLE_COLOR;
+  const group = documentRef.createElementNS(SVG_NAMESPACE, 'g');
+  const title = documentRef.createElementNS(SVG_NAMESPACE, 'title');
+  const hitTarget = documentRef.createElementNS(SVG_NAMESPACE, 'circle');
+  const halo = documentRef.createElementNS(SVG_NAMESPACE, 'circle');
+  const handle = documentRef.createElementNS(SVG_NAMESPACE, 'circle');
+
+  group.dataset.marginaliaConnectorHandle = endpoint;
+  group.dataset.marginaliaConnectorAnnotationId = connector.id;
+  group.style.cursor = active ? 'grabbing' : 'grab';
+
+  title.textContent = `Drag ${endpoint} connector attachment`;
+
+  hitTarget.setAttribute('cx', `${center.x}`);
+  hitTarget.setAttribute('cy', `${center.y}`);
+  hitTarget.setAttribute('r', `${CONNECTOR_HANDLE_HIT_RADIUS}`);
+  hitTarget.setAttribute('fill', 'transparent');
+  hitTarget.setAttribute('stroke', 'transparent');
+  hitTarget.setAttribute('vector-effect', 'non-scaling-stroke');
+  hitTarget.style.pointerEvents = 'all';
+  hitTarget.style.cursor = active ? 'grabbing' : 'grab';
+
+  halo.setAttribute('cx', `${center.x}`);
+  halo.setAttribute('cy', `${center.y}`);
+  halo.setAttribute('r', `${CONNECTOR_HANDLE_RADIUS + 2}`);
+  halo.setAttribute('fill', '#ffffff');
+  halo.setAttribute('fill-opacity', active ? '0.98' : '0.92');
+  halo.setAttribute('stroke', color);
+  halo.setAttribute('stroke-width', active ? '3' : '2');
+  halo.setAttribute('vector-effect', 'non-scaling-stroke');
+  halo.style.pointerEvents = 'none';
+
+  handle.dataset.marginaliaConnectorHandleVisual = 'true';
+  handle.setAttribute('cx', `${center.x}`);
+  handle.setAttribute('cy', `${center.y}`);
+  handle.setAttribute('r', `${CONNECTOR_HANDLE_RADIUS}`);
+  handle.setAttribute('fill', color);
+  handle.setAttribute('stroke', '#ffffff');
+  handle.setAttribute('stroke-width', active ? '2.5' : '2');
+  handle.setAttribute('vector-effect', 'non-scaling-stroke');
+  handle.style.pointerEvents = 'none';
+
+  group.append(title, hitTarget, halo, handle);
+
+  return group;
+};
+
 export const createOverlayController = (
   documentRef: Document = document,
   windowRef: Window = window,
@@ -800,8 +933,15 @@ export const createOverlayController = (
   let editingDraft: EditingDraft | null = null;
   let editingSavePending = false;
   let pendingTextBorderVisibility: { annotationId: string; borderVisible: boolean } | null = null;
+  let pendingAnnotationColor: { annotationId: string; color: AnnotationPalette | null } | null = null;
   let pendingCanvasRotation: { annotationId: string; rotation: number } | null = null;
   let previewCanvasRotation: { annotationId: string; rotation: number } | null = null;
+  let pendingConnectorAnchors:
+    | { annotationId: string; sourceAnchor: ConnectorAnchor; targetAnchor: ConnectorAnchor }
+    | null = null;
+  let previewConnectorAnchors:
+    | { annotationId: string; sourceAnchor: ConnectorAnchor; targetAnchor: ConnectorAnchor }
+    | null = null;
   let draftPointerId: number | null = null;
   let draftStartPoint: { x: number; y: number } | null = null;
   let draftShapeKind: ShapeTool | null = null;
@@ -809,6 +949,9 @@ export const createOverlayController = (
   let connectorSourceAnnotationId: string | null = null;
   let connectorSourceAnchor: ConnectorAnchor | null = null;
   let connectorPreviewPoint: { x: number; y: number } | null = null;
+  let connectorAnchorPointerId: number | null = null;
+  let connectorAnchorAnnotationId: string | null = null;
+  let connectorAnchorEndpoint: ConnectorEndpoint | null = null;
   let dragPointerId: number | null = null;
   let dragAnnotationId: string | null = null;
   let dragStartPoint: { x: number; y: number } | null = null;
@@ -819,6 +962,7 @@ export const createOverlayController = (
   let rotationCenterPoint: { x: number; y: number } | null = null;
   let rotationStartAngle: number | null = null;
   let rotationStartDegrees: number | null = null;
+  let rotationSnapTarget: number | null = null;
 
   const getShouldRenderOverlay = (): boolean => interactive || annotations.length > 0 || draftStartPoint !== null;
 
@@ -841,6 +985,32 @@ export const createOverlayController = (
         rotation,
       },
     } as T;
+  };
+
+  const applyVisibleConnectorAnchors = <T extends ConnectorAnnotation>(annotation: T): T => {
+    const visibleAnchors =
+      previewConnectorAnchors?.annotationId === annotation.id
+        ? previewConnectorAnchors
+        : pendingConnectorAnchors?.annotationId === annotation.id
+          ? pendingConnectorAnchors
+          : null;
+
+    if (
+      !visibleAnchors ||
+      (annotation.content.sourceAnchor === visibleAnchors.sourceAnchor &&
+        annotation.content.targetAnchor === visibleAnchors.targetAnchor)
+    ) {
+      return annotation;
+    }
+
+    return {
+      ...annotation,
+      content: {
+        ...annotation.content,
+        sourceAnchor: visibleAnchors.sourceAnchor,
+        targetAnchor: visibleAnchors.targetAnchor,
+      },
+    };
   };
 
   const getSelectedAnnotation = (): Annotation | undefined => {
@@ -871,6 +1041,26 @@ export const createOverlayController = (
     const annotation = annotations.find((candidate) => candidate.id === annotationId);
 
     return annotation && isCanvasAnnotation(annotation) ? annotation : undefined;
+  };
+
+  const getConnectorAnnotationById = (annotationId: string | null): ConnectorAnnotation | undefined => {
+    if (!annotationId) {
+      return undefined;
+    }
+
+    const annotation = annotations.find((candidate) => candidate.id === annotationId);
+
+    return annotation && isConnectorAnnotation(annotation) ? applyVisibleConnectorAnchors(annotation) : undefined;
+  };
+
+  const getPersistedConnectorAnnotationById = (annotationId: string | null): ConnectorAnnotation | undefined => {
+    if (!annotationId) {
+      return undefined;
+    }
+
+    const annotation = annotations.find((candidate) => candidate.id === annotationId);
+
+    return annotation && isConnectorAnnotation(annotation) ? annotation : undefined;
   };
 
   const getPendingConnectorSourceAnnotation = (): CanvasAnnotation | undefined =>
@@ -905,6 +1095,38 @@ export const createOverlayController = (
       ? pendingTextBorderVisibility.borderVisible
       : annotation.content.borderVisible;
 
+  const getEditableAnnotationColor = (annotation: ColorEditableAnnotation): AnnotationPalette | undefined =>
+    pendingAnnotationColor?.annotationId === annotation.id
+      ? pendingAnnotationColor.color ?? undefined
+      : annotation.content.color;
+
+  const getToolbarPaletteSelection = (annotation: ColorEditableAnnotation): AnnotationPalette | null =>
+    getEditableAnnotationColor(annotation) ?? getDefaultPaletteColorForAnnotation(annotation) ?? null;
+
+  const applyVisibleAnnotationColor = <T extends ColorEditableAnnotation>(annotation: T): T => {
+    if (pendingAnnotationColor?.annotationId !== annotation.id) {
+      return annotation;
+    }
+
+    if (annotation.type === 'sticky-note') {
+      return {
+        ...annotation,
+        content: {
+          ...annotation.content,
+          color: pendingAnnotationColor.color ?? annotation.content.color,
+        },
+      } as T;
+    }
+
+    return {
+      ...annotation,
+      content: {
+        ...annotation.content,
+        color: pendingAnnotationColor.color ?? undefined,
+      },
+    } as T;
+  };
+
   const getCanvasRotation = (annotation: CanvasAnnotation): number =>
     previewCanvasRotation?.annotationId === annotation.id
       ? normalizeRotation(previewCanvasRotation.rotation)
@@ -928,6 +1150,16 @@ export const createOverlayController = (
     }
 
     return selectedAnnotation;
+  };
+
+  const getConnectorHandleAnnotation = (): ConnectorAnnotation | undefined => {
+    if (!interactive || activeTool !== 'select' || editingDraft !== null || editingSavePending) {
+      return undefined;
+    }
+
+    const selectedAnnotation = getSelectedAnnotation();
+
+    return selectedAnnotation && isConnectorAnnotation(selectedAnnotation) ? applyVisibleConnectorAnchors(selectedAnnotation) : undefined;
   };
 
   const isEventInsideInlineEditor = (eventTarget: EventTarget | null): boolean =>
@@ -979,6 +1211,21 @@ export const createOverlayController = (
     return hadDraggedAnnotation;
   };
 
+  const clearConnectorAnchorGesture = (): boolean => {
+    const hadConnectorAnchorGesture =
+      connectorAnchorPointerId !== null ||
+      connectorAnchorAnnotationId !== null ||
+      connectorAnchorEndpoint !== null ||
+      previewConnectorAnchors !== null;
+
+    connectorAnchorPointerId = null;
+    connectorAnchorAnnotationId = null;
+    connectorAnchorEndpoint = null;
+    previewConnectorAnchors = null;
+
+    return hadConnectorAnchorGesture;
+  };
+
   const clearRotationGesture = (): boolean => {
     const hadRotationGesture =
       rotationPointerId !== null ||
@@ -986,13 +1233,15 @@ export const createOverlayController = (
       rotationCenterPoint !== null ||
       rotationStartAngle !== null ||
       rotationStartDegrees !== null ||
-      previewCanvasRotation !== null;
+      previewCanvasRotation !== null ||
+      rotationSnapTarget !== null;
 
     rotationPointerId = null;
     rotationAnnotationId = null;
     rotationCenterPoint = null;
     rotationStartAngle = null;
     rotationStartDegrees = null;
+    rotationSnapTarget = null;
     previewCanvasRotation = null;
 
     return hadRotationGesture;
@@ -1045,6 +1294,7 @@ export const createOverlayController = (
 
     clearDraftShape();
     clearConnectorDraft();
+    clearConnectorAnchorGesture();
     clearDraggedAnnotation();
     clearRotationGesture();
 
@@ -1059,6 +1309,10 @@ export const createOverlayController = (
     selectedAnnotationId = annotationId;
     if (rotationAnnotationId && rotationAnnotationId !== annotationId) {
       clearRotationGesture();
+    }
+
+    if (connectorAnchorAnnotationId && connectorAnchorAnnotationId !== annotationId) {
+      clearConnectorAnchorGesture();
     }
 
     if (editingDraft && editingDraft.annotationId !== annotationId) {
@@ -1135,6 +1389,51 @@ export const createOverlayController = (
     });
   };
 
+  const updateAnnotationColor = (
+    annotation: ColorEditableAnnotation,
+    nextColor: AnnotationPalette | null,
+  ): void => {
+    if (editingSavePending) {
+      return;
+    }
+
+    const resolvedColor = nextColor ?? undefined;
+
+    if (annotation.content.color === resolvedColor) {
+      return;
+    }
+
+    pendingAnnotationColor = {
+      annotationId: annotation.id,
+      color: nextColor,
+    };
+    syncToDocument();
+    const nextContent =
+      annotation.type === 'sticky-note'
+        ? {
+            ...annotation.content,
+            color: resolvedColor ?? annotation.content.color,
+          }
+        : resolvedColor
+          ? {
+              ...annotation.content,
+              color: resolvedColor,
+            }
+          : {
+              ...annotation.content,
+              color: undefined,
+            };
+    void Promise.resolve(
+      controllerOptions.onEditAnnotation?.(annotation.id, nextContent),
+    ).finally(() => {
+      if (pendingAnnotationColor?.annotationId === annotation.id) {
+        pendingAnnotationColor = null;
+      }
+
+      syncToDocument();
+    });
+  };
+
   const updateCanvasRotation = (annotation: CanvasAnnotation, rotation: number): void => {
     const nextRotation = normalizeRotation(rotation);
 
@@ -1161,6 +1460,59 @@ export const createOverlayController = (
     });
   };
 
+  const updateConnectorAnchors = (
+    annotation: ConnectorAnnotation,
+    sourceAnchor: ConnectorAnchor,
+    targetAnchor: ConnectorAnchor,
+  ): void => {
+    if (
+      editingSavePending ||
+      (annotation.content.sourceAnchor === sourceAnchor && annotation.content.targetAnchor === targetAnchor)
+    ) {
+      return;
+    }
+
+    pendingConnectorAnchors = {
+      annotationId: annotation.id,
+      sourceAnchor,
+      targetAnchor,
+    };
+    syncToDocument();
+    void Promise.resolve(
+      controllerOptions.onEditAnnotation?.(annotation.id, {
+        ...annotation.content,
+        sourceAnchor,
+        targetAnchor,
+      }),
+    ).finally(() => {
+      if (
+        pendingConnectorAnchors?.annotationId === annotation.id &&
+        pendingConnectorAnchors.sourceAnchor === sourceAnchor &&
+        pendingConnectorAnchors.targetAnchor === targetAnchor
+      ) {
+        pendingConnectorAnchors = null;
+      }
+
+      syncToDocument();
+    });
+  };
+
+  const commitToolbarRotationInput = (
+    annotation: CanvasAnnotation,
+    inputElement: HTMLInputElement,
+  ): void => {
+    const parsedRotation = Number.parseFloat(inputElement.value);
+
+    if (!Number.isFinite(parsedRotation)) {
+      inputElement.value = String(clampRotationInput(getCanvasRotation(annotation)));
+      return;
+    }
+
+    const nextRotation = clampRotationInput(parsedRotation);
+    inputElement.value = String(nextRotation);
+    updateCanvasRotation(annotation, nextRotation);
+  };
+
   const switchToSelectToolAfterCreation = (): void => {
     if (activeTool === 'select') {
       return;
@@ -1181,6 +1533,11 @@ export const createOverlayController = (
 
     const selectedAnnotation = getSelectedAnnotation();
     const editableSelectedAnnotation = isEditableAnnotation(selectedAnnotation) ? selectedAnnotation : undefined;
+    const colorEditableSelectedAnnotation = isColorEditableAnnotation(selectedAnnotation) ? selectedAnnotation : undefined;
+    const selectedCanvasAnnotation =
+      editableSelectedAnnotation && isCanvasAnnotation(editableSelectedAnnotation)
+        ? editableSelectedAnnotation
+        : undefined;
 
     toolbarEditSectionElement.replaceChildren();
 
@@ -1195,9 +1552,14 @@ export const createOverlayController = (
     controlsRow.style.marginTop = '12px';
 
     if (!editingDraft || editingDraft.annotationId !== editableSelectedAnnotation.id) {
+      const currentText =
+        editableSelectedAnnotation.type === 'sticky-note'
+          ? editableSelectedAnnotation.content.text
+          : editableSelectedAnnotation.content.text ?? '';
+      const hasText = currentText.trim().length > 0;
       const heading = documentRef.createElement('p');
       heading.textContent =
-        editableSelectedAnnotation.type === 'sticky-note' ? 'Sticky note editor' : 'Text controls';
+        editableSelectedAnnotation.type === 'sticky-note' ? 'Note details' : 'Text & color';
       heading.style.margin = '12px 0 0';
       heading.style.fontSize = '12px';
       heading.style.fontWeight = '600';
@@ -1207,19 +1569,49 @@ export const createOverlayController = (
       const note = documentRef.createElement('p');
       note.textContent =
         editableSelectedAnnotation.type === 'sticky-note'
-          ? 'Open the note editor to update the title and body, then save when you are done.'
+          ? 'Keep the note readable with a quick title, a body, and a color that stands out on the page.'
           : editableSelectedAnnotation.type === 'text'
-            ? 'Edit the text directly on the page and choose whether its border stays visible after you leave.'
-            : 'Edit the text directly on the shape from the canvas.';
+            ? 'Edit the text directly on the page, keep its border if you want, and tune the color without leaving the page.'
+            : 'Add or revise a label anytime — the canvas editor opens right on top of the shape.';
       note.style.margin = '6px 0 0';
       note.style.fontSize = '12px';
       note.style.color = '#cbd5e1';
       toolbarEditSectionElement.append(note);
 
+      const previewCard = documentRef.createElement('div');
+      previewCard.style.marginTop = '10px';
+      previewCard.style.padding = '10px 12px';
+      previewCard.style.borderRadius = '14px';
+      previewCard.style.border = '1px solid rgba(148, 163, 184, 0.16)';
+      previewCard.style.background = 'rgba(15, 23, 42, 0.42)';
+
+      const previewLabel = documentRef.createElement('p');
+      previewLabel.textContent = editableSelectedAnnotation.type === 'sticky-note' ? 'Preview' : 'Current label';
+      previewLabel.style.margin = '0';
+      previewLabel.style.fontSize = '11px';
+      previewLabel.style.fontWeight = '700';
+      previewLabel.style.letterSpacing = '0.04em';
+      previewLabel.style.textTransform = 'uppercase';
+      previewLabel.style.color = '#94a3b8';
+
+      const previewBody = documentRef.createElement('p');
+      previewBody.textContent = hasText
+        ? currentText
+        : editableSelectedAnnotation.type === 'sticky-note'
+          ? 'Add a note body so this stays useful later.'
+          : 'No text yet — add a short label so this shape is easy to find again.';
+      previewBody.style.margin = '6px 0 0';
+      previewBody.style.fontSize = '12px';
+      previewBody.style.lineHeight = '1.45';
+      previewBody.style.color = hasText ? '#f8fafc' : '#cbd5e1';
+
+      previewCard.append(previewLabel, previewBody);
+      toolbarEditSectionElement.append(previewCard);
+
       const editButton = documentRef.createElement('button');
       editButton.type = 'button';
       editButton.textContent =
-        editableSelectedAnnotation.type === 'sticky-note' ? 'Edit note' : 'Edit text';
+        editableSelectedAnnotation.type === 'sticky-note' ? 'Edit note' : hasText ? 'Edit text' : 'Add text';
       editButton.style.padding = '8px 12px';
       editButton.style.border = '1px solid rgba(129, 140, 248, 0.5)';
       editButton.style.borderRadius = '999px';
@@ -1228,13 +1620,180 @@ export const createOverlayController = (
       editButton.style.cursor = 'pointer';
       editButton.style.font = 'inherit';
       editButton.addEventListener('click', () => {
-        if (!startEditingSelection(editableSelectedAnnotation.id)) {
+        if (
+          !startEditingSelection(editableSelectedAnnotation.id, {
+            selectAllOnFocus: !hasText,
+          })
+        ) {
           return;
         }
 
         syncToDocument();
       });
       controlsRow.append(editButton);
+
+      if (colorEditableSelectedAnnotation) {
+        const colorLabel = documentRef.createElement('p');
+        colorLabel.textContent = 'Color';
+        colorLabel.style.margin = '12px 0 0';
+        colorLabel.style.fontSize = '12px';
+        colorLabel.style.fontWeight = '600';
+        colorLabel.style.color = '#e0e7ff';
+        toolbarEditSectionElement.append(colorLabel);
+
+        const colorRow = documentRef.createElement('div');
+        colorRow.style.display = 'flex';
+        colorRow.style.flexWrap = 'wrap';
+        colorRow.style.gap = '8px';
+        colorRow.style.marginTop = '8px';
+
+        const selectedPalette = getToolbarPaletteSelection(colorEditableSelectedAnnotation);
+        const colorOptions: Array<{ color: AnnotationPalette | null; label: string }> = [
+          ...(colorEditableSelectedAnnotation.type === 'rectangle'
+            ? [{ color: null, label: 'Default ink' }]
+            : []),
+          ...ANNOTATION_PALETTE.map((color) => ({
+            color,
+            label: `${color.slice(0, 1).toUpperCase()}${color.slice(1)}`,
+          })),
+        ];
+
+        for (const option of colorOptions) {
+          const swatchButton = documentRef.createElement('button');
+          const active = selectedPalette === option.color;
+          swatchButton.type = 'button';
+          swatchButton.setAttribute(
+            'aria-label',
+            option.color
+              ? `Set ${getToolbarToolLabel(colorEditableSelectedAnnotation.type)} color to ${option.label.toLowerCase()}`
+              : `Use default ${getToolbarToolLabel(colorEditableSelectedAnnotation.type)} color`,
+          );
+          swatchButton.title = option.color ? option.label : 'Default ink';
+          swatchButton.style.display = 'inline-flex';
+          swatchButton.style.alignItems = 'center';
+          swatchButton.style.justifyContent = 'center';
+          swatchButton.style.width = '28px';
+          swatchButton.style.height = '28px';
+          swatchButton.style.padding = '0';
+          swatchButton.style.borderRadius = '999px';
+          swatchButton.style.border = active
+            ? '2px solid rgba(248, 250, 252, 0.95)'
+            : '1px solid rgba(148, 163, 184, 0.28)';
+          swatchButton.style.background = option.color
+            ? getAnnotationColor(option.color)
+            : 'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(15, 23, 42, 0.75))';
+          swatchButton.style.boxShadow = active
+            ? '0 0 0 2px rgba(79, 70, 229, 0.38)'
+            : 'inset 0 1px 0 rgba(255, 255, 255, 0.08)';
+          swatchButton.style.cursor = 'pointer';
+          swatchButton.style.position = 'relative';
+
+          if (!option.color) {
+            const slash = documentRef.createElement('span');
+            slash.textContent = '•';
+            slash.style.fontSize = '12px';
+            slash.style.fontWeight = '700';
+            slash.style.color = '#e2e8f0';
+            swatchButton.append(slash);
+          }
+
+          swatchButton.addEventListener('click', () => {
+            updateAnnotationColor(colorEditableSelectedAnnotation, option.color);
+          });
+          colorRow.append(swatchButton);
+        }
+
+        toolbarEditSectionElement.append(colorRow);
+      }
+
+      if (selectedCanvasAnnotation) {
+        const currentRotation = clampRotationInput(getCanvasRotation(selectedCanvasAnnotation));
+        const rotationControlsDisabled =
+          editingSavePending || pendingCanvasRotation?.annotationId === selectedCanvasAnnotation.id;
+
+        const transformLabel = documentRef.createElement('p');
+        transformLabel.textContent = 'Transform';
+        transformLabel.style.margin = '12px 0 0';
+        transformLabel.style.fontSize = '12px';
+        transformLabel.style.fontWeight = '600';
+        transformLabel.style.color = '#e0e7ff';
+        toolbarEditSectionElement.append(transformLabel);
+
+        const transformRow = documentRef.createElement('div');
+        transformRow.style.display = 'flex';
+        transformRow.style.flexWrap = 'wrap';
+        transformRow.style.gap = '8px';
+        transformRow.style.marginTop = '8px';
+
+        const rotationField = documentRef.createElement('label');
+        rotationField.style.display = 'inline-flex';
+        rotationField.style.alignItems = 'center';
+        rotationField.style.gap = '8px';
+        rotationField.style.padding = '8px 12px';
+        rotationField.style.borderRadius = '999px';
+        rotationField.style.border = '1px solid rgba(148, 163, 184, 0.22)';
+        rotationField.style.background = 'rgba(15, 23, 42, 0.48)';
+        rotationField.style.color = '#e2e8f0';
+        rotationField.style.fontSize = '12px';
+
+        const rotationLabel = documentRef.createElement('span');
+        rotationLabel.textContent = 'Rotate';
+
+        const rotationInput = documentRef.createElement('input');
+        rotationInput.type = 'number';
+        rotationInput.value = String(currentRotation);
+        rotationInput.min = '-180';
+        rotationInput.max = '180';
+        rotationInput.step = '1';
+        rotationInput.disabled = rotationControlsDisabled;
+        rotationInput.setAttribute('aria-label', 'Annotation rotation');
+        rotationInput.style.width = '72px';
+        rotationInput.style.padding = '6px 8px';
+        rotationInput.style.borderRadius = '10px';
+        rotationInput.style.border = '1px solid rgba(148, 163, 184, 0.28)';
+        rotationInput.style.background = 'rgba(15, 23, 42, 0.82)';
+        rotationInput.style.color = '#f8fafc';
+        rotationInput.style.font = 'inherit';
+        rotationInput.addEventListener('blur', () => {
+          commitToolbarRotationInput(selectedCanvasAnnotation, rotationInput);
+        });
+        rotationInput.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') {
+            return;
+          }
+
+          event.preventDefault();
+          commitToolbarRotationInput(selectedCanvasAnnotation, rotationInput);
+          rotationInput.blur();
+        });
+
+        const rotationUnit = documentRef.createElement('span');
+        rotationUnit.textContent = '°';
+        rotationUnit.style.color = '#94a3b8';
+
+        rotationField.append(rotationLabel, rotationInput, rotationUnit);
+        transformRow.append(rotationField);
+
+        const resetRotationButton = documentRef.createElement('button');
+        resetRotationButton.type = 'button';
+        resetRotationButton.textContent = 'Reset';
+        resetRotationButton.disabled = rotationControlsDisabled || currentRotation === 0;
+        resetRotationButton.setAttribute('aria-label', 'Reset annotation rotation');
+        resetRotationButton.style.padding = '8px 12px';
+        resetRotationButton.style.border = '1px solid rgba(148, 163, 184, 0.22)';
+        resetRotationButton.style.borderRadius = '999px';
+        resetRotationButton.style.background = 'rgba(15, 23, 42, 0.48)';
+        resetRotationButton.style.color = '#e2e8f0';
+        resetRotationButton.style.cursor = resetRotationButton.disabled ? 'not-allowed' : 'pointer';
+        resetRotationButton.style.font = 'inherit';
+        resetRotationButton.style.opacity = resetRotationButton.disabled ? '0.55' : '1';
+        resetRotationButton.addEventListener('click', () => {
+          updateCanvasRotation(selectedCanvasAnnotation, DEFAULT_CANVAS_ROTATION);
+        });
+        transformRow.append(resetRotationButton);
+
+        toolbarEditSectionElement.append(transformRow);
+      }
 
       if (editableSelectedAnnotation.type === 'text') {
         const borderLabel = documentRef.createElement('label');
@@ -1266,6 +1825,15 @@ export const createOverlayController = (
 
       toolbarEditSectionElement.append(controlsRow);
 
+      if (selectedCanvasAnnotation) {
+        const shortcutNote = documentRef.createElement('p');
+        shortcutNote.textContent = 'Tip: press Tab to cycle selection, then use arrow keys to nudge. Hold Shift to move 10 px.';
+        shortcutNote.style.margin = '10px 0 0';
+        shortcutNote.style.fontSize = '12px';
+        shortcutNote.style.color = '#cbd5e1';
+        toolbarEditSectionElement.append(shortcutNote);
+      }
+
       if (editableSelectedAnnotation.type === 'text') {
         const note = documentRef.createElement('p');
         note.textContent =
@@ -1276,7 +1844,9 @@ export const createOverlayController = (
         toolbarEditSectionElement.append(note);
       } else if (editableSelectedAnnotation.type !== 'sticky-note') {
         const note = documentRef.createElement('p');
-        note.textContent = 'Double-click the annotation to edit directly on the canvas.';
+        note.textContent = hasText
+          ? 'Double-click the annotation anytime to jump straight back into editing on the canvas.'
+          : 'No label yet? Use Add text or double-click the shape to write directly on the canvas.';
         note.style.margin = '10px 0 0';
         note.style.fontSize = '12px';
         note.style.color = '#cbd5e1';
@@ -1994,7 +2564,19 @@ export const createOverlayController = (
 
     const draggedBounds = dragCurrentBounds;
     let renderedAnnotations = annotations.map((annotation) =>
-      isCanvasAnnotation(annotation) ? applyVisibleCanvasRotation(annotation) : annotation,
+      isCanvasAnnotation(annotation)
+        ? (() => {
+            let visibleAnnotation = applyVisibleCanvasRotation(annotation);
+
+            if (isColorEditableAnnotation(visibleAnnotation)) {
+              visibleAnnotation = applyVisibleAnnotationColor(visibleAnnotation);
+            }
+
+            return visibleAnnotation;
+          })()
+        : isConnectorAnnotation(annotation)
+          ? applyVisibleConnectorAnchors(annotation)
+          : annotation,
     );
 
     if (dragAnnotationId && draggedBounds) {
@@ -2043,7 +2625,14 @@ export const createOverlayController = (
     annotationsLayer.replaceChildren(...connectorElements, ...annotationElements);
     selectionLayer.replaceChildren();
 
-    const rotationHandleAnnotation = getRotationHandleAnnotation();
+    const rotationHandleAnnotationId = getRotationHandleAnnotation()?.id;
+    const rotationHandleAnnotation =
+      rotationHandleAnnotationId !== undefined && rotationHandleAnnotationId !== null
+        ? canvasAnnotationsById.get(rotationHandleAnnotationId)
+        : undefined;
+    const connectorHandleAnnotation = getConnectorHandleAnnotation();
+    const renderedConnectorHandleAnnotation =
+      connectorHandleAnnotation !== undefined ? getConnectorAnnotationById(connectorHandleAnnotation.id) : undefined;
 
     if (rotationHandleAnnotation) {
       selectionLayer.append(
@@ -2053,6 +2642,35 @@ export const createOverlayController = (
           rotationPointerId !== null && rotationAnnotationId === rotationHandleAnnotation.id,
         ),
       );
+    }
+
+    if (renderedConnectorHandleAnnotation) {
+      const sourceHandle = createConnectorHandleElement(
+        documentRef,
+        renderedConnectorHandleAnnotation,
+        'source',
+        canvasAnnotationsById,
+        connectorAnchorPointerId !== null &&
+          connectorAnchorAnnotationId === renderedConnectorHandleAnnotation.id &&
+          connectorAnchorEndpoint === 'source',
+      );
+      const targetHandle = createConnectorHandleElement(
+        documentRef,
+        renderedConnectorHandleAnnotation,
+        'target',
+        canvasAnnotationsById,
+        connectorAnchorPointerId !== null &&
+          connectorAnchorAnnotationId === renderedConnectorHandleAnnotation.id &&
+          connectorAnchorEndpoint === 'target',
+      );
+
+      if (sourceHandle) {
+        selectionLayer.append(sourceHandle);
+      }
+
+      if (targetHandle) {
+        selectionLayer.append(targetHandle);
+      }
     }
 
     if (draftLayer) {
@@ -2244,6 +2862,24 @@ export const createOverlayController = (
     return handleElement?.getAttribute('data-marginalia-rotation-annotation-id') ?? null;
   };
 
+  const findConnectorHandle = (
+    eventTarget: EventTarget | null,
+  ): { annotationId: string; endpoint: ConnectorEndpoint } | null => {
+    if (!(eventTarget instanceof Element)) {
+      return null;
+    }
+
+    const handleElement = eventTarget.closest('[data-marginalia-connector-handle]');
+    const annotationId = handleElement?.getAttribute('data-marginalia-connector-annotation-id') ?? null;
+    const endpoint = handleElement?.getAttribute('data-marginalia-connector-handle');
+
+    if (!annotationId || (endpoint !== 'source' && endpoint !== 'target')) {
+      return null;
+    }
+
+    return { annotationId, endpoint };
+  };
+
   const beginRotationGesture = (annotation: CanvasAnnotation, event: PointerEvent): void => {
     const center = getCanvasAnnotationCenter(annotation.content);
     const point = toPagePoint(event);
@@ -2254,9 +2890,29 @@ export const createOverlayController = (
     rotationCenterPoint = center;
     rotationStartAngle = getAngleFromCenter(center, point);
     rotationStartDegrees = getCanvasRotation(annotation);
+    rotationSnapTarget = null;
     previewCanvasRotation = {
       annotationId: annotation.id,
       rotation: rotationStartDegrees,
+    };
+    overlayElement?.setPointerCapture?.(event.pointerId);
+    syncToDocument();
+  };
+
+  const beginConnectorAnchorGesture = (
+    annotation: ConnectorAnnotation,
+    endpoint: ConnectorEndpoint,
+    event: PointerEvent,
+  ): void => {
+    clearDraggedAnnotation();
+    clearRotationGesture();
+    connectorAnchorPointerId = event.pointerId;
+    connectorAnchorAnnotationId = annotation.id;
+    connectorAnchorEndpoint = endpoint;
+    previewConnectorAnchors = {
+      annotationId: annotation.id,
+      sourceAnchor: annotation.content.sourceAnchor,
+      targetAnchor: annotation.content.targetAnchor,
     };
     overlayElement?.setPointerCapture?.(event.pointerId);
     syncToDocument();
@@ -2273,21 +2929,73 @@ export const createOverlayController = (
       return false;
     }
 
-    const nextRotation = normalizeRotation(
+    const rawNextRotation = normalizeRotation(
       rotationStartDegrees + (getAngleFromCenter(rotationCenterPoint, toPagePoint(event)) - rotationStartAngle),
     );
+    const { rotation: nextRotation, snapTarget } = resolveRotationSnap(rawNextRotation, rotationSnapTarget);
 
     if (
       previewCanvasRotation?.annotationId === rotationAnnotationId &&
-      previewCanvasRotation.rotation === nextRotation
+      previewCanvasRotation.rotation === nextRotation &&
+      rotationSnapTarget === snapTarget
     ) {
       return true;
     }
 
+    rotationSnapTarget = snapTarget;
     previewCanvasRotation = {
       annotationId: rotationAnnotationId,
       rotation: nextRotation,
     };
+    syncToDocument();
+
+    return true;
+  };
+
+  const updateConnectorAnchorGesture = (event: PointerEvent): boolean => {
+    if (
+      connectorAnchorPointerId !== event.pointerId ||
+      !connectorAnchorAnnotationId ||
+      !connectorAnchorEndpoint ||
+      !previewConnectorAnchors
+    ) {
+      return false;
+    }
+
+    const connector = getConnectorAnnotationById(connectorAnchorAnnotationId);
+
+    if (!connector) {
+      clearConnectorAnchorGesture();
+      syncToDocument();
+
+      return true;
+    }
+
+    const attachedAnnotation = getCanvasAnnotationById(
+      connectorAnchorEndpoint === 'source' ? connector.content.sourceId : connector.content.targetId,
+    );
+
+    if (!attachedAnnotation) {
+      clearConnectorAnchorGesture();
+      syncToDocument();
+
+      return true;
+    }
+
+    const nextAnchor = resolveNearestAnchor(attachedAnnotation.content, toPagePoint(event));
+    const nextPreview =
+      connectorAnchorEndpoint === 'source'
+        ? { ...previewConnectorAnchors, sourceAnchor: nextAnchor }
+        : { ...previewConnectorAnchors, targetAnchor: nextAnchor };
+
+    if (
+      nextPreview.sourceAnchor === previewConnectorAnchors.sourceAnchor &&
+      nextPreview.targetAnchor === previewConnectorAnchors.targetAnchor
+    ) {
+      return true;
+    }
+
+    previewConnectorAnchors = nextPreview;
     syncToDocument();
 
     return true;
@@ -2312,6 +3020,35 @@ export const createOverlayController = (
     }
 
     updateCanvasRotation(annotation, finalRotation);
+
+    return true;
+  };
+
+  const finishConnectorAnchorGesture = (event: PointerEvent): boolean => {
+    if (
+      connectorAnchorPointerId !== event.pointerId ||
+      !connectorAnchorAnnotationId ||
+      !previewConnectorAnchors
+    ) {
+      return false;
+    }
+
+    const annotation = getPersistedConnectorAnnotationById(connectorAnchorAnnotationId);
+    const nextAnchors = { ...previewConnectorAnchors };
+
+    clearConnectorAnchorGesture();
+
+    if (
+      !annotation ||
+      (annotation.content.sourceAnchor === nextAnchors.sourceAnchor &&
+        annotation.content.targetAnchor === nextAnchors.targetAnchor)
+    ) {
+      syncToDocument();
+
+      return true;
+    }
+
+    updateConnectorAnchors(annotation, nextAnchors.sourceAnchor, nextAnchors.targetAnchor);
 
     return true;
   };
@@ -2354,6 +3091,20 @@ export const createOverlayController = (
     }
 
     if (activeTool === 'select') {
+      const connectorHandle = findConnectorHandle(event.target);
+
+      if (connectorHandle) {
+        const connectorAnnotation = getConnectorAnnotationById(connectorHandle.annotationId);
+
+        if (connectorAnnotation) {
+          event.preventDefault();
+          setSelection(connectorAnnotation.id, true);
+          beginConnectorAnchorGesture(connectorAnnotation, connectorHandle.endpoint, event);
+        }
+
+        return;
+      }
+
       const rotationHandleAnnotationId = findRotationHandleAnnotationId(event.target);
 
       if (rotationHandleAnnotationId) {
@@ -2381,6 +3132,7 @@ export const createOverlayController = (
       const selectionChanged = setSelection(annotationId, true);
 
       clearDraggedAnnotation();
+      clearConnectorAnchorGesture();
       clearRotationGesture();
 
       if (selectedCanvasAnnotation) {
@@ -2500,6 +3252,10 @@ export const createOverlayController = (
   }
 
   function handlePointerMove(event: PointerEvent): void {
+    if (updateConnectorAnchorGesture(event)) {
+      return;
+    }
+
     if (updateRotationGesture(event)) {
       return;
     }
@@ -2545,6 +3301,10 @@ export const createOverlayController = (
   }
 
   function handlePointerUp(event: PointerEvent): void {
+    if (finishConnectorAnchorGesture(event)) {
+      return;
+    }
+
     if (finishRotationGesture(event)) {
       return;
     }
@@ -2582,6 +3342,13 @@ export const createOverlayController = (
   }
 
   function handlePointerCancel(event: PointerEvent): void {
+    if (connectorAnchorPointerId === event.pointerId) {
+      clearConnectorAnchorGesture();
+      syncToDocument();
+
+      return;
+    }
+
     if (rotationPointerId === event.pointerId) {
       clearRotationGesture();
       syncToDocument();
@@ -2636,6 +3403,7 @@ export const createOverlayController = (
     cancelled = clearEditingDraft() || cancelled;
     cancelled = clearDraftShape() || cancelled;
     cancelled = clearConnectorDraft() || cancelled;
+    cancelled = clearConnectorAnchorGesture() || cancelled;
     cancelled = clearDraggedAnnotation() || cancelled;
     cancelled = clearRotationGesture() || cancelled;
     cancelled = setSelection(null, true) || cancelled;
@@ -2655,6 +3423,7 @@ export const createOverlayController = (
         clearEditingDraft();
         clearDraftShape();
         clearConnectorDraft();
+        clearConnectorAnchorGesture();
         clearDraggedAnnotation();
         clearRotationGesture();
       }
@@ -2694,6 +3463,18 @@ export const createOverlayController = (
         clearRotationGesture();
       }
 
+      const pendingAnchors = pendingConnectorAnchors;
+
+      if (pendingAnchors && !annotations.some((annotation) => annotation.id === pendingAnchors.annotationId)) {
+        pendingConnectorAnchors = null;
+      }
+
+      const previewAnchors = previewConnectorAnchors;
+
+      if (previewAnchors && !annotations.some((annotation) => annotation.id === previewAnchors.annotationId)) {
+        clearConnectorAnchorGesture();
+      }
+
       if (!getPendingConnectorSourceAnnotation()) {
         clearConnectorDraft();
       }
@@ -2714,6 +3495,7 @@ export const createOverlayController = (
       clearEditingDraft();
       clearDraftShape();
       clearConnectorDraft();
+      clearConnectorAnchorGesture();
       clearDraggedAnnotation();
       clearRotationGesture();
 
