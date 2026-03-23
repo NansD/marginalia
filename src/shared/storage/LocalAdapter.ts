@@ -1,7 +1,7 @@
 import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 import type { Annotation, PageRecord } from '@/shared/models/annotations';
-import { createEmptyPageRecord } from '@/shared/models/annotations';
+import { createEmptyPageRecord, normalizeAnnotation, normalizeAnnotations, normalizePageRecord } from '@/shared/models/annotations';
 import type { StorageAdapter } from '@/shared/storage/StorageAdapter';
 
 interface MarginaliaDatabase extends DBSchema {
@@ -49,21 +49,22 @@ export class LocalAdapter implements StorageAdapter {
   public async getAnnotations(canonicalUrl: string): Promise<Annotation[]> {
     const pageRecord = await this.getPageRecord(canonicalUrl);
 
-    return cloneValue(pageRecord?.annotations ?? []);
+    return cloneValue(normalizeAnnotations(pageRecord?.annotations ?? []));
   }
 
   public async saveAnnotation(canonicalUrl: string, annotation: Annotation): Promise<Annotation> {
     const database = await this.openDatabase();
-    const pageRecord = (await database.get(PAGE_STORE, canonicalUrl)) ?? createEmptyPageRecord(canonicalUrl);
+    const pageRecord = (await this.getPageRecord(canonicalUrl)) ?? createEmptyPageRecord(canonicalUrl);
+    const normalizedAnnotation = normalizeAnnotation(annotation);
     const existingIndex = pageRecord.annotations.findIndex(
-      (storedAnnotation) => storedAnnotation.id === annotation.id,
+      (storedAnnotation) => storedAnnotation.id === normalizedAnnotation.id,
     );
     const nextAnnotations = [...pageRecord.annotations];
 
     if (existingIndex >= 0) {
-      nextAnnotations[existingIndex] = cloneValue(annotation);
+      nextAnnotations[existingIndex] = cloneValue(normalizedAnnotation);
     } else {
-      nextAnnotations.push(cloneValue(annotation));
+      nextAnnotations.push(cloneValue(normalizedAnnotation));
     }
 
     await database.put(PAGE_STORE, {
@@ -72,12 +73,12 @@ export class LocalAdapter implements StorageAdapter {
       annotations: nextAnnotations,
     });
 
-    return cloneValue(annotation);
+    return cloneValue(normalizedAnnotation);
   }
 
   public async deleteAnnotation(canonicalUrl: string, annotationId: string): Promise<boolean> {
     const database = await this.openDatabase();
-    const pageRecord = await database.get(PAGE_STORE, canonicalUrl);
+    const pageRecord = await this.getPageRecord(canonicalUrl);
 
     if (!pageRecord) {
       return false;
@@ -111,12 +112,13 @@ export class LocalAdapter implements StorageAdapter {
     return pageRecords
       .filter((pageRecord) => pageRecord.annotations.length > 0)
       .sort((left, right) => right.lastVisited.localeCompare(left.lastVisited))
-      .map((pageRecord) => cloneValue(pageRecord));
+      .map((pageRecord) => cloneValue(normalizePageRecord(pageRecord)));
   }
 
   private async getPageRecord(canonicalUrl: string): Promise<PageRecord | undefined> {
     const database = await this.openDatabase();
+    const pageRecord = await database.get(PAGE_STORE, canonicalUrl);
 
-    return database.get(PAGE_STORE, canonicalUrl);
+    return pageRecord ? normalizePageRecord(pageRecord) : undefined;
   }
 }

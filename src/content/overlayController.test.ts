@@ -1,12 +1,14 @@
 import { fireEvent, screen } from '@testing-library/react';
 
 import {
+  buildCircleAnnotation,
   buildConnectorAnnotation,
   buildEllipseAnnotation,
   buildRectangleAnnotation,
   buildStickyNoteAnnotation,
   buildTextAnnotation,
 } from '@/test/factories';
+import type { AnnotationContent } from '@/shared/models/annotations';
 
 import {
   createOverlayController,
@@ -30,6 +32,14 @@ const getDraftEllipse = (): SVGEllipseElement | null =>
 
 const getDraftConnector = (): SVGLineElement | null =>
   getOverlayElement().querySelector<SVGLineElement>('g[data-marginalia-layer="drafts"] line');
+
+const getRotationHandle = (): SVGCircleElement | null =>
+  getOverlayElement().querySelector<SVGCircleElement>('[data-marginalia-rotation-handle="true"]');
+
+const flushMicrotasks = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
 describe('createOverlayController', () => {
   beforeEach(() => {
@@ -64,10 +74,11 @@ describe('createOverlayController', () => {
     expect(document.getElementById(OVERLAY_TOOLBAR_ID)).not.toBeInTheDocument();
   });
 
-  it('renders supported v1 annotations inertly for future editing work', () => {
+  it('renders supported annotations inertly for future editing work', () => {
     const controller = createOverlayController(document, window);
 
     controller.setAnnotations([
+      buildCircleAnnotation('circle-1'),
       buildEllipseAnnotation('ellipse-1'),
       buildTextAnnotation('text-1'),
       buildStickyNoteAnnotation('sticky-1'),
@@ -82,6 +93,7 @@ describe('createOverlayController', () => {
     const overlayElement = getOverlayElement();
 
     expect(overlayElement).toHaveAttribute('data-mode', 'inert');
+    expect(overlayElement.querySelector('[data-marginalia-annotation-id="circle-1"]')).toBeInTheDocument();
     expect(overlayElement.querySelector('[data-marginalia-annotation-id="ellipse-1"]')).toBeInTheDocument();
     expect(overlayElement.querySelector('[data-marginalia-annotation-id="text-1"]')).toBeInTheDocument();
     expect(overlayElement.querySelector('[data-marginalia-annotation-id="sticky-1"]')).toBeInTheDocument();
@@ -96,6 +108,7 @@ describe('createOverlayController', () => {
 
     expect(screen.getByText('Marginalia annotation mode')).toBeInTheDocument();
     expect(screen.getByText('Drag anywhere on the page to draw a rectangle annotation.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Circle (Shift+O)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete selected' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
@@ -137,6 +150,8 @@ describe('createOverlayController', () => {
       y: 30,
       width: 80,
       height: 50,
+      rotation: 0,
+      text: '',
     });
     expect(getDraftRectangle()).not.toBeInTheDocument();
   });
@@ -170,7 +185,41 @@ describe('createOverlayController', () => {
       y: 40,
       width: 80,
       height: 80,
+      rotation: 0,
       color: 'green',
+      text: '',
+    });
+    expect(getDraftEllipse()).not.toBeInTheDocument();
+  });
+
+  it('creates constrained circle annotations from pointer interactions', () => {
+    const onCreateAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+
+    controller.setInteractive(true);
+    controller.setActiveTool('circle');
+
+    const overlayElement = getOverlayElement();
+
+    fireEvent.pointerDown(overlayElement, { button: 0, clientX: 160, clientY: 120, pointerId: 21 });
+    fireEvent.pointerMove(overlayElement, { clientX: 120, clientY: 40, pointerId: 21 });
+
+    expect(getDraftEllipse()).toHaveAttribute('cx', '120');
+    expect(getDraftEllipse()).toHaveAttribute('cy', '80');
+    expect(getDraftEllipse()).toHaveAttribute('rx', '40');
+    expect(getDraftEllipse()).toHaveAttribute('ry', '40');
+
+    fireEvent.pointerUp(overlayElement, { pointerId: 21 });
+
+    expect(onCreateAnnotation).toHaveBeenCalledWith({
+      kind: 'circle',
+      x: 80,
+      y: 40,
+      width: 80,
+      height: 80,
+      rotation: 0,
+      color: 'pink',
+      text: '',
     });
     expect(getDraftEllipse()).not.toBeInTheDocument();
   });
@@ -190,9 +239,69 @@ describe('createOverlayController', () => {
       y: 64,
       width: 220,
       height: 56,
+      rotation: 0,
       color: 'blue',
+      borderVisible: false,
       text: 'Text annotation',
     });
+  });
+
+  it('renders text annotations without a visible border until selected', () => {
+    const controller = createOverlayController(document, window);
+
+    controller.setAnnotations([buildTextAnnotation('annotation-text')]);
+
+    const hitTarget = getOverlayElement().querySelector<SVGRectElement>(
+      '[data-marginalia-annotation-id="annotation-text"] rect',
+    );
+
+    expect(hitTarget).toHaveAttribute('stroke', 'transparent');
+    expect(hitTarget).toHaveAttribute('fill-opacity', '0.001');
+  });
+
+  it('updates text border visibility from toolbar controls and keeps it visible when deselected', async () => {
+    const onEditAnnotation = vi.fn((annotationId: string, content: AnnotationContent) => {
+      if (content.kind !== 'text') {
+        throw new Error('Expected text annotation content');
+      }
+
+      const updatedAnnotation = buildTextAnnotation(annotationId, { content });
+      controller.setAnnotations([updatedAnnotation]);
+
+      return Promise.resolve();
+    });
+
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+    controller.setAnnotations([buildTextAnnotation('annotation-text')]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-text"]');
+
+    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 12 });
+
+    const borderToggle = screen.getByRole('checkbox', { name: 'Keep text annotation border visible' });
+    expect(borderToggle).not.toBeChecked();
+
+    fireEvent.click(borderToggle);
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-text',
+      expect.objectContaining({
+        kind: 'text',
+        borderVisible: true,
+      }),
+    );
+
+    controller.setSelection(null);
+
+    const hitTarget = getOverlayElement().querySelector<SVGRectElement>(
+      '[data-marginalia-annotation-id="annotation-text"] rect',
+    );
+
+    expect(hitTarget).toHaveAttribute('stroke', '#3b82f6');
+    expect(hitTarget).toHaveAttribute('fill-opacity', '0.02');
   });
 
   it('creates sticky notes with sensible click-to-place defaults', () => {
@@ -210,6 +319,7 @@ describe('createOverlayController', () => {
       y: 110,
       width: 220,
       height: 160,
+      rotation: 0,
       color: 'yellow',
       collapsed: false,
       text: 'New note',
@@ -352,30 +462,106 @@ describe('createOverlayController', () => {
     expect(onRunCommand).toHaveBeenCalledWith('delete-selected-annotation');
   });
 
-  it('opens editor controls for selected text annotations and saves edits', () => {
+  it('starts inline editing immediately after creating a text annotation', async () => {
     const onEditAnnotation = vi.fn();
-    const controller = createOverlayController(document, window, { onEditAnnotation });
+    const onCreateAnnotation = vi.fn((content: AnnotationContent) => {
+      expect(content.kind).toBe('text');
+      if (content.kind !== 'text') {
+        throw new Error('Expected text annotation content');
+      }
+      const createdAnnotation = buildTextAnnotation('annotation-text-new', { content });
+      controller.setAnnotations([createdAnnotation]);
 
-    controller.setAnnotations([buildTextAnnotation('annotation-text')]);
+      return Promise.resolve(createdAnnotation);
+    });
+
+    const controller = createOverlayController(document, window, { onCreateAnnotation, onEditAnnotation });
     controller.setInteractive(true);
-    controller.setActiveTool('select');
+    controller.setActiveTool('text');
 
-    const annotationElement = getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-text"]');
+    fireEvent.pointerDown(getOverlayElement(), { button: 0, clientX: 42, clientY: 64, pointerId: 3 });
+    await flushMicrotasks();
 
-    fireEvent.pointerDown(annotationElement!, { button: 0, pointerId: 12 });
-    fireEvent.click(screen.getByRole('button', { name: 'Edit selected' }));
-    fireEvent.input(screen.getByLabelText('Annotation text'), {
+    expect(getOverlayElement()).toHaveAttribute('data-active-tool', 'select');
+    expect(screen.getByText('Select tool active. Selected Text annotation.')).toBeInTheDocument();
+    const editor = screen.getByLabelText('Text annotation editor');
+    expect(editor).toHaveValue('Text annotation');
+    expect(screen.getByRole('checkbox', { name: 'Keep text annotation border visible' })).not.toBeChecked();
+
+    fireEvent.input(editor, {
       target: { value: 'Updated annotation copy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Keep text annotation border visible' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save text' }));
+    await flushMicrotasks();
 
     expect(onEditAnnotation).toHaveBeenCalledWith(
-      'annotation-text',
+      'annotation-text-new',
       expect.objectContaining({
         kind: 'text',
+        borderVisible: true,
         text: 'Updated annotation copy',
       }),
     );
+  });
+
+  it('opens sticky note editor controls immediately after creation', async () => {
+    const onCreateAnnotation = vi.fn((content: AnnotationContent) => {
+      if (content.kind !== 'sticky-note') {
+        throw new Error('Expected sticky note annotation content');
+      }
+
+      expect(content).toMatchObject({
+        kind: 'sticky-note',
+        title: 'Sticky note',
+        text: 'New note',
+      });
+
+      const createdAnnotation = buildStickyNoteAnnotation('annotation-sticky-note-new', { content });
+      controller.setAnnotations([createdAnnotation]);
+
+      return Promise.resolve(createdAnnotation);
+    });
+
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+    controller.setInteractive(true);
+    controller.setActiveTool('sticky-note');
+
+    fireEvent.pointerDown(getOverlayElement(), { button: 0, clientX: 90, clientY: 110, pointerId: 9 });
+    await flushMicrotasks();
+
+    expect(getOverlayElement()).toHaveAttribute('data-active-tool', 'select');
+    expect(screen.getByText('Select tool active. Selected Sticky note annotation.')).toBeInTheDocument();
+    expect(screen.getByText('Sticky note editor')).toBeInTheDocument();
+    expect(screen.getByLabelText('Sticky note title')).toHaveValue('Sticky note');
+    expect(screen.getByLabelText('Sticky note text')).toHaveValue('New note');
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeInTheDocument();
+  });
+
+  it('falls back to select mode and opens inline editing after creating rectangles', async () => {
+    const onCreateAnnotation = vi.fn((content: AnnotationContent) => {
+      if (content.kind !== 'rectangle') {
+        throw new Error('Expected rectangle annotation content');
+      }
+
+      const createdAnnotation = buildRectangleAnnotation('annotation-rectangle-new', { content });
+      controller.setAnnotations([createdAnnotation]);
+
+      return Promise.resolve(createdAnnotation);
+    });
+
+    const controller = createOverlayController(document, window, { onCreateAnnotation });
+    controller.setInteractive(true);
+
+    const overlayElement = getOverlayElement();
+    fireEvent.pointerDown(overlayElement, { button: 0, clientX: 40, clientY: 50, pointerId: 41 });
+    fireEvent.pointerMove(overlayElement, { clientX: 140, clientY: 110, pointerId: 41 });
+    fireEvent.pointerUp(overlayElement, { pointerId: 41 });
+    await flushMicrotasks();
+
+    expect(getOverlayElement()).toHaveAttribute('data-active-tool', 'select');
+    expect(screen.getByText('Select tool active. Selected Rectangle annotation.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rectangle text editor')).toHaveValue('');
   });
 
   it('opens editor controls on double click for sticky notes and cancels cleanly', () => {
@@ -397,10 +583,46 @@ describe('createOverlayController', () => {
 
     fireEvent.input(screen.getByLabelText('Sticky note title'), { target: { value: 'Revised note' } });
     fireEvent.input(screen.getByLabelText('Sticky note text'), { target: { value: 'A better sticky note body' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel editing' }));
 
     expect(screen.queryByLabelText('Sticky note title')).not.toBeInTheDocument();
     expect(onEditAnnotation).not.toHaveBeenCalled();
+  });
+
+  it('edits rectangle text inline from canvas interactions', async () => {
+    const onEditAnnotation = vi.fn();
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+
+    controller.setAnnotations([
+      buildRectangleAnnotation('annotation-rectangle', {
+        content: {
+          text: 'Before',
+        },
+      }),
+    ]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    const annotationElement = getOverlayElement().querySelector(
+      '[data-marginalia-annotation-id="annotation-rectangle"]',
+    );
+
+    fireEvent.doubleClick(annotationElement!);
+
+    const editor = screen.getByLabelText('Rectangle text editor');
+    expect(editor).toHaveValue('Before');
+
+    fireEvent.input(editor, { target: { value: 'Inside shape' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save text' }));
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-rectangle',
+      expect.objectContaining({
+        kind: 'rectangle',
+        text: 'Inside shape',
+      }),
+    );
   });
 
   it('drags selected canvas annotations in select mode and keeps connectors aligned', () => {
@@ -453,6 +675,78 @@ describe('createOverlayController', () => {
       width: 160,
       height: 72,
     });
+  });
+
+  it('rotates selected annotations from the on-canvas handle and keeps connectors aligned', async () => {
+    const targetAnnotation = buildTextAnnotation('annotation-target', {
+      content: {
+        x: 260,
+        y: 64,
+      },
+    });
+    const connectorAnnotation = buildConnectorAnnotation('annotation-connector', {
+      content: {
+        sourceId: 'annotation-source',
+        targetId: 'annotation-target',
+      },
+    });
+    const onEditAnnotation = vi.fn((annotationId: string, content: AnnotationContent) => {
+      if (content.kind !== 'rectangle') {
+        throw new Error('Expected rectangle annotation content');
+      }
+
+      controller.setAnnotations([
+        buildRectangleAnnotation(annotationId, { content }),
+        targetAnnotation,
+        connectorAnnotation,
+      ]);
+
+      return Promise.resolve();
+    });
+
+    const controller = createOverlayController(document, window, { onEditAnnotation });
+    controller.setAnnotations([buildRectangleAnnotation('annotation-source'), targetAnnotation, connectorAnnotation]);
+    controller.setInteractive(true);
+    controller.setActiveTool('select');
+
+    fireEvent.pointerDown(
+      getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-source"]')!,
+      { button: 0, pointerId: 29 },
+    );
+
+    expect(screen.queryByRole('spinbutton', { name: 'Annotation rotation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset annotation rotation' })).not.toBeInTheDocument();
+    expect(getRotationHandle()).toBeInTheDocument();
+    expect(
+      getOverlayElement().querySelector('g[data-marginalia-layer="selection"]'),
+    ).not.toHaveStyle({ pointerEvents: 'none' });
+    expect(getRotationHandle()).toHaveStyle({ pointerEvents: 'all' });
+
+    fireEvent.pointerDown(getRotationHandle()!, { button: 0, clientX: 96, clientY: 6, pointerId: 30 });
+
+    expect(getOverlayElement()).toHaveAttribute('data-selection', 'single');
+    expect(screen.getByText('Select tool active. Selected Rectangle annotation.')).toBeInTheDocument();
+
+    fireEvent.pointerMove(getOverlayElement(), { clientX: 176, clientY: 60, pointerId: 30 });
+    fireEvent.pointerUp(getOverlayElement(), { pointerId: 30 });
+    await flushMicrotasks();
+
+    expect(onEditAnnotation).toHaveBeenCalledWith(
+      'annotation-source',
+      expect.objectContaining({
+        kind: 'rectangle',
+        rotation: 90,
+      }),
+    );
+    expect(
+      getOverlayElement().querySelector('[data-marginalia-annotation-id="annotation-source"]'),
+    ).toHaveAttribute('transform', 'rotate(90 96 60)');
+    expect(
+      getOverlayElement().querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
+    ).toHaveAttribute('x1', '96');
+    expect(
+      getOverlayElement().querySelector<SVGLineElement>('[data-marginalia-annotation-id="annotation-connector"]'),
+    ).toHaveAttribute('y1', '140');
   });
 
   it('queues document sync through requestAnimationFrame on scroll and resize', () => {

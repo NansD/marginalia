@@ -1,6 +1,37 @@
-export const ANNOTATION_TOOLS = ['select', 'text', 'sticky-note', 'rectangle', 'ellipse', 'connector'] as const;
+export const ANNOTATION_TOOLS = ['select', 'text', 'sticky-note', 'rectangle', 'ellipse', 'circle', 'connector'] as const;
 
 export type AnnotationTool = (typeof ANNOTATION_TOOLS)[number];
+
+export const ANNOTATION_TOOL_METADATA = {
+  select: {
+    label: 'Select',
+    hint: 'Click an annotation to select it.',
+  },
+  text: {
+    label: 'Text',
+    hint: 'Click anywhere on the page to place a text annotation.',
+  },
+  'sticky-note': {
+    label: 'Sticky note',
+    hint: 'Click anywhere on the page to place a sticky note.',
+  },
+  rectangle: {
+    label: 'Rectangle',
+    hint: 'Drag anywhere on the page to draw a rectangle annotation.',
+  },
+  ellipse: {
+    label: 'Ellipse',
+    hint: 'Drag anywhere on the page to draw an ellipse annotation.',
+  },
+  circle: {
+    label: 'Circle',
+    hint: 'Drag anywhere on the page to draw a perfect circle annotation.',
+  },
+  connector: {
+    label: 'Connector',
+    hint: 'Click a source annotation, then click a target annotation to connect them.',
+  },
+} as const satisfies Record<AnnotationTool, { label: string; hint: string }>;
 
 export const ANNOTATION_COMMANDS = ['cancel-current-action', 'delete-selected-annotation', 'undo', 'redo'] as const;
 

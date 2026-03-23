@@ -1,5 +1,6 @@
 import {
   ANNOTATION_COMMANDS,
+  ANNOTATION_TOOL_METADATA,
   ANNOTATION_TOOLS,
   isRuntimeMessage,
 } from '@/shared/runtime/messages';
@@ -11,6 +12,10 @@ describe('isRuntimeMessage', () => {
 
   it.each(ANNOTATION_COMMANDS)('accepts annotation command messages for %s', (command) => {
     expect(isRuntimeMessage({ kind: 'run-annotation-command', command })).toBe(true);
+  });
+
+  it('defines shared metadata for every annotation tool', () => {
+    expect(Object.keys(ANNOTATION_TOOL_METADATA).sort()).toEqual([...ANNOTATION_TOOLS].sort());
   });
 
   it('accepts page state and annotation mode messages', () => {

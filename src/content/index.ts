@@ -55,6 +55,8 @@ const buildAnnotation = (content: AnnotationContent, timestamp: string): Annotat
       return { ...baseAnnotation, type: 'rectangle', content };
     case 'ellipse':
       return { ...baseAnnotation, type: 'ellipse', content };
+    case 'circle':
+      return { ...baseAnnotation, type: 'circle', content };
     case 'text':
       return { ...baseAnnotation, type: 'text', content };
     case 'sticky-note':
@@ -252,7 +254,7 @@ const bootstrapContentScript = async (): Promise<void> => {
     return getState();
   };
 
-  const handleCreateAnnotation = async (content: AnnotationContent): Promise<void> => {
+  const handleCreateAnnotation = async (content: AnnotationContent): Promise<Annotation | undefined> => {
     if (!canCreateConnector(annotations, content)) {
       return;
     }
@@ -260,12 +262,15 @@ const bootstrapContentScript = async (): Promise<void> => {
     const timestamp = new Date().toISOString();
     const annotation = buildAnnotation(content, timestamp);
     const annotationCanonicalUrl = canonicalUrl;
+    let savedCreatedAnnotation: Annotation | undefined;
 
     await commandHistory.execute({
       execute: async () => {
         const savedAnnotation = await adapter.saveAnnotation(annotationCanonicalUrl, annotation);
         annotations = annotations.filter((existingAnnotation) => existingAnnotation.id !== savedAnnotation.id);
         annotations = [...annotations, savedAnnotation];
+        selectedAnnotationId = savedAnnotation.id;
+        savedCreatedAnnotation = savedAnnotation;
         await persistAnnotationsChanged(annotationCanonicalUrl);
       },
       undo: async () => {
@@ -277,6 +282,8 @@ const bootstrapContentScript = async (): Promise<void> => {
         await persistAnnotationsChanged(annotationCanonicalUrl);
       },
     });
+
+    return savedCreatedAnnotation;
   };
 
   const handleMoveAnnotation = async (annotationId: string, bounds: CanvasBounds): Promise<void> => {
@@ -322,7 +329,7 @@ const bootstrapContentScript = async (): Promise<void> => {
 
     if (
       !currentAnnotation ||
-      (currentAnnotation.type !== 'text' && currentAnnotation.type !== 'sticky-note') ||
+      currentAnnotation.type === 'connector' ||
       currentAnnotation.content.kind !== content.kind ||
       areAnnotationContentsEqual(currentAnnotation.content, content)
     ) {
@@ -331,18 +338,61 @@ const bootstrapContentScript = async (): Promise<void> => {
 
     const annotationCanonicalUrl = canonicalUrl;
     const previousAnnotation = currentAnnotation;
-    const editedAnnotation: Annotation =
-      currentAnnotation.type === 'text'
-        ? {
-            ...currentAnnotation,
-            updatedAt: new Date().toISOString(),
-            content: content as typeof currentAnnotation.content,
-          }
-        : {
-            ...currentAnnotation,
-            updatedAt: new Date().toISOString(),
-            content: content as typeof currentAnnotation.content,
-          };
+    const updatedAt = new Date().toISOString();
+    let editedAnnotation: Annotation;
+
+    switch (currentAnnotation.type) {
+      case 'text':
+        if (content.kind !== 'text') {
+          return;
+        }
+        editedAnnotation = {
+          ...currentAnnotation,
+          updatedAt,
+          content,
+        };
+        break;
+      case 'sticky-note':
+        if (content.kind !== 'sticky-note') {
+          return;
+        }
+        editedAnnotation = {
+          ...currentAnnotation,
+          updatedAt,
+          content,
+        };
+        break;
+      case 'rectangle':
+        if (content.kind !== 'rectangle') {
+          return;
+        }
+        editedAnnotation = {
+          ...currentAnnotation,
+          updatedAt,
+          content,
+        };
+        break;
+      case 'ellipse':
+        if (content.kind !== 'ellipse') {
+          return;
+        }
+        editedAnnotation = {
+          ...currentAnnotation,
+          updatedAt,
+          content,
+        };
+        break;
+      case 'circle':
+        if (content.kind !== 'circle') {
+          return;
+        }
+        editedAnnotation = {
+          ...currentAnnotation,
+          updatedAt,
+          content,
+        };
+        break;
+    }
 
     await commandHistory.execute({
       execute: async () => {

@@ -1,5 +1,6 @@
 import type {
   Annotation,
+  CircleAnnotation,
   ConnectorAnnotation,
   EllipseAnnotation,
   PageRecord,
@@ -40,6 +41,8 @@ export const buildRectangleAnnotation = (
         y: 24,
         width: 160,
         height: 72,
+        rotation: 0,
+        text: '',
       },
     },
     overrides,
@@ -61,7 +64,33 @@ export const buildEllipseAnnotation = (
         y: 48,
         width: 120,
         height: 64,
+        rotation: 0,
         color: 'green',
+        text: '',
+      },
+    },
+    overrides,
+  );
+
+export const buildCircleAnnotation = (
+  id = 'annotation-circle',
+  overrides: AnnotationOverrides<CircleAnnotation> = {},
+): CircleAnnotation =>
+  mergeAnnotation(
+    {
+      id,
+      type: 'circle',
+      createdAt: DEFAULT_CREATED_AT,
+      updatedAt: DEFAULT_UPDATED_AT,
+      content: {
+        kind: 'circle',
+        x: 80,
+        y: 96,
+        width: 96,
+        height: 96,
+        rotation: 0,
+        color: 'pink',
+        text: '',
       },
     },
     overrides,
@@ -83,7 +112,9 @@ export const buildTextAnnotation = (
         y: 64,
         width: 200,
         height: 48,
+        rotation: 0,
         color: 'blue',
+        borderVisible: false,
         text: 'Test annotation',
       },
     },
@@ -106,6 +137,7 @@ export const buildStickyNoteAnnotation = (
         y: 80,
         width: 180,
         height: 140,
+        rotation: 0,
         color: 'yellow',
         text: 'Remember this detail',
         collapsed: false,

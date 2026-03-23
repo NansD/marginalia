@@ -7,6 +7,7 @@ export const SHORTCUT_ACTIONS = [
   'stickyNoteTool',
   'rectangleTool',
   'ellipseTool',
+  'circleTool',
   'connectorTool',
   'cancelCurrentAction',
   'deleteSelectedAnnotation',
@@ -112,6 +113,18 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinitions = {
       primaryModifier: false,
     },
     runtimeMessage: { kind: 'select-annotation-tool', tool: 'ellipse' },
+  },
+  circleTool: {
+    label: 'Circle tool',
+    description: 'Activate the circle drawing tool.',
+    section: 'Tools',
+    defaultBinding: {
+      code: 'KeyO',
+      altKey: false,
+      shiftKey: true,
+      primaryModifier: false,
+    },
+    runtimeMessage: { kind: 'select-annotation-tool', tool: 'circle' },
   },
   connectorTool: {
     label: 'Connector tool',

@@ -118,6 +118,7 @@ describe('content script object tools', () => {
 
       expect(annotations.map((annotation) => annotation.type)).toEqual(['ellipse']);
     });
+    expect(overlayElement).toHaveAttribute('data-active-tool', 'select');
 
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'text' });
     fireEvent.pointerDown(overlayElement!, { button: 0, clientX: 48, clientY: 72, pointerId: 2 });
@@ -127,6 +128,8 @@ describe('content script object tools', () => {
 
       expect(annotations.map((annotation) => annotation.type)).toEqual(['ellipse', 'text']);
     });
+    expect(overlayElement).toHaveAttribute('data-active-tool', 'select');
+    expect(document.querySelector('textarea[aria-label="Text annotation editor"]')).toBeInTheDocument();
 
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'sticky-note' });
     fireEvent.pointerDown(overlayElement!, { button: 0, clientX: 260, clientY: 140, pointerId: 3 });
@@ -136,6 +139,8 @@ describe('content script object tools', () => {
 
       expect(annotations.map((annotation) => annotation.type)).toEqual(['ellipse', 'text', 'sticky-note']);
     });
+    expect(overlayElement).toHaveAttribute('data-active-tool', 'select');
+    expect(document.querySelector('input[aria-label="Sticky note title"]')).toBeInTheDocument();
 
     const savedAnnotations = await adapter.getAnnotations(canonicalUrl);
     const ellipseAnnotation = savedAnnotations.find((annotation) => annotation.type === 'ellipse');
@@ -182,12 +187,48 @@ describe('content script object tools', () => {
       clientY: 120,
       pointerId: 6,
     });
-    fireEvent.pointerMove(overlayElement!, { clientX: 220, clientY: 150, pointerId: 6 });
 
-    expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '160');
-    expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '120');
+    expect(screen.queryByRole('spinbutton', { name: 'Annotation rotation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset annotation rotation' })).not.toBeInTheDocument();
 
-    fireEvent.pointerUp(overlayElement!, { pointerId: 6 });
+    const rotationHandle = document.querySelector('[data-marginalia-rotation-handle="true"]');
+    expect(rotationHandle).toBeInTheDocument();
+
+    fireEvent.pointerDown(rotationHandle!, {
+      button: 0,
+      clientX: 150,
+      clientY: 42,
+      pointerId: 7,
+    });
+    fireEvent.pointerMove(overlayElement!, { clientX: 210, clientY: 90, pointerId: 7 });
+    fireEvent.pointerUp(overlayElement!, { pointerId: 7 });
+
+    await waitFor(async () => {
+      const annotations = await adapter.getAnnotations(canonicalUrl);
+      const rotatedEllipseAnnotation = annotations.find((annotation) => annotation.id === ellipseAnnotation!.id);
+
+      expect(rotatedEllipseAnnotation).toMatchObject({
+        content: {
+          kind: 'ellipse',
+          rotation: 90,
+        },
+      });
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '150');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '60');
+    });
+
+    fireEvent.pointerDown(document.querySelector(`[data-marginalia-annotation-id="${ellipseAnnotation!.id}"]`)!, {
+      button: 0,
+      clientX: 180,
+      clientY: 120,
+      pointerId: 8,
+    });
+    fireEvent.pointerMove(overlayElement!, { clientX: 220, clientY: 150, pointerId: 8 });
+
+    expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '190');
+    expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '90');
+
+    fireEvent.pointerUp(overlayElement!, { pointerId: 8 });
 
     await waitFor(async () => {
       const annotations = await adapter.getAnnotations(canonicalUrl);
@@ -221,8 +262,8 @@ describe('content script object tools', () => {
           color: 'green',
         },
       });
-      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '120');
-      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '90');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '150');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '60');
     });
 
     await dispatchRuntimeMessage({ kind: 'run-annotation-command', command: 'redo' });
@@ -241,8 +282,8 @@ describe('content script object tools', () => {
           color: 'green',
         },
       });
-      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '160');
-      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '120');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('x1', '190');
+      expect(document.querySelector('[data-marginalia-annotation-kind="connector"]')).toHaveAttribute('y1', '90');
     });
 
     fireEvent.pointerDown(
@@ -392,6 +433,8 @@ describe('content script object tools', () => {
 
       expect(annotations.map((annotation) => annotation.type)).toEqual(['text']);
     });
+    expect(overlayElement).toHaveAttribute('data-active-tool', 'select');
+    expect(document.querySelector('textarea[aria-label="Text annotation editor"]')).toBeInTheDocument();
 
     await dispatchRuntimeMessage({ kind: 'select-annotation-tool', tool: 'sticky-note' });
     fireEvent.pointerDown(overlayElement!, { button: 0, clientX: 260, clientY: 140, pointerId: 22 });
@@ -401,6 +444,9 @@ describe('content script object tools', () => {
 
       expect(annotations.map((annotation) => annotation.type)).toEqual(['text', 'sticky-note']);
     });
+    expect(overlayElement).toHaveAttribute('data-active-tool', 'select');
+    expect(document.querySelector('input[aria-label="Sticky note title"]')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel editing' }));
 
     const [textAnnotation, stickyNoteAnnotation] = await adapter.getAnnotations(canonicalUrl);
 
@@ -415,13 +461,13 @@ describe('content script object tools', () => {
     });
     fireEvent.click(
       Array.from(document.querySelectorAll<HTMLButtonElement>('#marginalia-overlay-toolbar button')).find(
-        (button) => button.textContent === 'Edit selected',
+        (button) => button.textContent === 'Edit text',
       )!,
     );
-    fireEvent.input(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Annotation text"]')!, {
+    fireEvent.input(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Text annotation editor"]')!, {
       target: { value: 'Edited text annotation' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save text' }));
 
     await waitFor(async () => {
       const annotations = await adapter.getAnnotations(canonicalUrl);
@@ -470,7 +516,7 @@ describe('content script object tools', () => {
     fireEvent.input(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Sticky note text"]')!, {
       target: { value: 'Edited sticky body' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
 
     await waitFor(async () => {
       const annotations = await adapter.getAnnotations(canonicalUrl);

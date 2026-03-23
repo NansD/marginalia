@@ -51,6 +51,8 @@ describe('shortcut bindings', () => {
     expect(formatShortcut(DEFAULT_SHORTCUT_BINDINGS.toggleAnnotationMode, 'Win32')).toBe('Ctrl+Shift+Y');
     expect(formatShortcut(DEFAULT_SHORTCUT_BINDINGS.toggleAnnotationMode, 'MacIntel')).toBe('⌘⇧Y');
     expect(formatShortcut(DEFAULT_SHORTCUT_BINDINGS.selectTool, 'Win32')).toBe('V');
+    expect(formatShortcut(DEFAULT_SHORTCUT_BINDINGS.circleTool, 'Win32')).toBe('Shift+O');
+    expect(formatShortcut(DEFAULT_SHORTCUT_BINDINGS.circleTool, 'MacIntel')).toBe('⇧O');
     expect(formatShortcut(DEFAULT_SHORTCUT_BINDINGS.cancelCurrentAction, 'MacIntel')).toBe('Escape');
   });
 
@@ -58,6 +60,10 @@ describe('shortcut bindings', () => {
     expect(getShortcutRuntimeMessage('rectangleTool')).toEqual({
       kind: 'select-annotation-tool',
       tool: 'rectangle',
+    });
+    expect(getShortcutRuntimeMessage('circleTool')).toEqual({
+      kind: 'select-annotation-tool',
+      tool: 'circle',
     });
     expect(getShortcutRuntimeMessage('undo')).toEqual({
       kind: 'run-annotation-command',

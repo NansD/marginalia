@@ -70,4 +70,36 @@ describe('LocalAdapter', () => {
 
     expect(annotation.content.text).toBe('Updated text');
   });
+
+  it('hydrates legacy canvas metadata defaults when reading stored annotations', async () => {
+    const databaseName = `marginalia-test-${crypto.randomUUID()}`;
+    const adapter = new LocalAdapter(createLocalAdapterDatabaseOpener(databaseName));
+    const canonicalUrl = 'https://example.com/articles/legacy';
+
+    await adapter.saveAnnotation(canonicalUrl, {
+      ...buildTextAnnotation('annotation-legacy'),
+      content: {
+        kind: 'text',
+        x: 48,
+        y: 64,
+        width: 200,
+        height: 48,
+        color: 'blue',
+        text: 'Legacy text',
+      },
+    } as ReturnType<typeof buildTextAnnotation>);
+
+    const [annotation] = await adapter.getAnnotations(canonicalUrl);
+
+    expect(annotation).toMatchObject({
+      id: 'annotation-legacy',
+      type: 'text',
+      content: {
+        kind: 'text',
+        rotation: 0,
+        borderVisible: false,
+        text: 'Legacy text',
+      },
+    });
+  });
 });
